@@ -1,0 +1,30 @@
+{
+  "name": "bumper-balls",
+  "version": "2.6.0",
+  "description": "碰碰球大乱斗 - 轻量多人在线派对游戏",
+  "main": "server.js",
+  "scripts": {
+    "start": "node launcher.js",
+    "serve": "node server.js",
+    "test": "node test/modes.test.js && node test/jump.test.js && node test/lobby.test.js && node test/server.test.js && node test/net.test.js && node test/lan.test.js && node test/results.test.js && node test/client.test.js && node test/update.test.js && node test/tunnel.test.js && node test/i18n.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khaichonggg/Game.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/khaichonggg/Game/issues"
+  },
+  "homepage": "https://github.com/khaichonggg/Game#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "update": {
+    "repo": "khaichonggg/Game",
+    "branch": "",
+    "fallbackBranch": "main"
+  },
+  "releaseNotes": "新增 9 种模式、5 张随机地图、获胜条件说明和实战录屏；加入 Boss 技能、跳跃及手机操作优化"
+}

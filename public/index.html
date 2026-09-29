@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1b1440" />
+  <title>碰碰球大乱斗</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/svg+xml" href="logo.svg" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js", "qrcode": "./vendor/qrcode.mjs" } }
+  </script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="vignette"></div>
+  <div id="hotEdge" class="hidden"><span id="hotFuse"></span></div>
+  <div id="stickerLayer"></div>
+
+  <!-- 主菜单 -->
+  <section id="scr-menu" class="screen">
+    <header class="topbar">
+      <button class="profile-chip" id="menuProfile" title="换装">
+        <span class="avatar" id="menuAvatar"></span>
+        <span class="chip-text"><b id="menuName"></b><small>点我换装 / 改名</small></span>
+      </button>
+      <div class="lan-pill hidden" id="lanPill">
+        <span class="lan-lbl">📶 同一 Wi-Fi 的朋友打开</span>
+        <b id="lanUrl" class="lan-url"></b>
+        <button class="lan-copy" id="lanCopy">📋 复制</button>
+        <button class="lan-qr" id="lanQR" title="显示二维码">▦</button>
+      </div>
+      <div class="icon-row">
+        <button class="update-pill hidden" id="btnUpdate" title="有新版本">🆕 <span id="updVer"></span></button>
+        <button class="icon-btn lang-btn" id="btnLang">EN</button>
+        <button class="icon-btn" id="btnBoard" title="排行榜">🏆</button>
+        <button class="icon-btn" id="btnHelp" title="玩法说明">❓</button>
+        <button class="icon-btn" id="btnSettings" title="设置">⚙️</button>
+      </div>
+    </header>
+    <div class="menu-body">
+      <div class="logo">
+        <div class="logo-lockup">
+          <img class="logo-emblem" src="logo.svg" alt="" draggable="false" />
+          <div class="logo-words">
+            <div class="logo-top">碰碰球</div>
+            <div class="logo-bottom">大乱斗</div>
+          </div>
+        </div>
+        <div class="logo-sub"><span class="sub-zh">BUMPER BRAWL</span><span class="sub-en" data-no-i18n>碰碰球大乱斗</span></div>
+        <div class="logo-tag">16 种模式 · 5 张地图 · 最多 8 人同乐</div>
+      </div>
+      <div class="menu-actions">
+        <button class="btn btn-yellow btn-xl" id="btnQuick"><span class="btn-ico">⚡</span><span>快速开始<small>加入正在等人的房间</small></span></button>
+        <button class="btn btn-blue btn-lg" id="btnCreate"><span class="btn-ico">🏠</span><span>创建房间<small>当房主，邀请朋友</small></span></button>
+        <button class="btn btn-purple btn-lg" id="btnRooms"><span class="btn-ico">📡</span><span>局域网房间<small id="roomCountHint">看看附近有谁在玩</small></span></button>
+        <div class="join-code">
+          <input id="codeInput" maxlength="4" placeholder="输入房间码" autocomplete="off" spellcheck="false" />
+          <button class="btn btn-green" id="btnJoin">加入</button>
+        </div>
+        <p class="error" id="menuError"></p>
+      </div>
+    </div>
+    <footer class="menu-foot" id="lanHint"></footer>
+  </section>
+
+  <!-- 衣柜 -->
+  <section id="scr-wardrobe" class="screen hidden">
+    <header class="topbar">
+      <button class="btn btn-ghost" id="wardBack">← 返回</button>
+      <h2 class="title">我的角色</h2>
+      <span class="topbar-spacer"></span>
+    </header>
+    <div class="ward-panel panel">
+      <div class="field-label">昵称</div>
+      <div class="name-row">
+        <input id="nameInput" maxlength="12" autocomplete="off" />
+        <button class="icon-btn small" id="btnRandomName" title="随机名字">🎲</button>
+      </div>
+      <div class="tabs" id="wardTabs">
+        <button data-tab="char" class="on">角色</button>
+        <button data-tab="skin">皮肤</button>
+        <button data-tab="color">颜色</button>
+        <button data-tab="hat">帽子</button>
+      </div>
+      <div class="grid" id="wardGrid"></div>
+      <div class="ward-actions">
+        <button class="btn btn-ghost" id="btnRandomLook">🎲 随机搭配</button>
+        <button class="btn btn-yellow" id="wardSave">保存</button>
+      </div>
+    </div>
+    <div class="drag-hint">← 按住拖动可以旋转角色 →</div>
+  </section>
+
+  <!-- 局域网房间列表 -->
+  <section id="scr-rooms" class="screen hidden">
+    <header class="topbar">
+      <button class="btn btn-ghost" id="roomsBack">← 返回</button>
+      <h2 class="title">局域网房间</h2>
+      <button class="btn btn-ghost" id="roomsRefresh">🔄 刷新</button>
+    </header>
+    <div class="panel rooms-panel">
+      <div id="roomList"></div>
+      <p class="hint" id="roomsHint"></p>
+    </div>
+  </section>
+
+  <!-- 房间大厅 -->
+  <section id="scr-lobby" class="screen hidden">
+    <header class="topbar lobby-top">
+      <button class="btn btn-ghost" id="btnLeave">← <span class="lbl">离开</span></button>
+      <div class="room-title">
+        <span class="room-name" id="roomName"></span>
+        <span class="room-tag" id="roomTag"></span>
+        <button class="icon-btn small host-only" id="btnRename" title="修改房间名">✏️</button>
+      </div>
+      <button class="btn btn-blue" id="btnInvite">📨 <span class="invite-lbl">邀请</span> <span class="code-box"><small>房间码</small><b id="roomCode" class="code"></b></span></button>
+    </header>
+    <div class="lobby-grid">
+      <div class="panel lobby-left">
+        <div class="section-title">🗺️ 地图</div>
+        <div class="map-random-note">🎲 每局开始时随机选择地图</div>
+        <div class="section-title">模式</div>
+        <div class="mode-filters" id="modeFilters" role="group"></div>
+        <div class="cards mode-cards" id="modeCards"></div>
+        <div class="mode-desc" id="modeDesc"></div>
+        <div class="settings-rows">
+          <div class="set-row"><span id="targetLabel">目标</span><div class="seg" id="targetSeg"></div></div>
+          <div class="set-row"><span>人数上限</span><div class="stepper"><button id="maxDown">−</button><b id="maxVal">8</b><button id="maxUp">+</button></div></div>
+          <div class="set-row"><span>机器人难度</span><div class="seg" id="botSeg"></div></div>
+          <div class="set-row"><span>场上道具</span><button class="toggle" id="itemsToggle"><i></i></button></div>
+          <div class="set-row"><span>地板会坍塌</span><button class="toggle" id="floorCollapseToggle"><i></i></button></div>
+          <div class="set-row"><span>公开房间 <small>（出现在局域网列表）</small></span><button class="toggle" id="publicToggle"><i></i></button></div>
+        </div>
+      </div>
+      <div class="panel lobby-right">
+        <div class="section-title">
+          👥 玩家 <span class="count" id="playerCount"></span>
+          <span class="spacer"></span>
+          <button class="btn btn-mini host-only" id="btnShuffle">🔀 随机分队</button>
+          <button class="btn btn-mini host-only" id="btnAddBot" title="添加机器人">+ 🤖</button>
+          <button class="btn btn-mini host-only" id="btnRemoveBot" title="移除机器人">− 🤖</button>
+        </div>
+        <div id="playerList"></div>
+        <div class="chat">
+          <div class="chat-log" id="chatLog"></div>
+          <div class="chat-input">
+            <button class="icon-btn small" id="btnEmoteLobby" title="表情">😀</button>
+            <input id="chatInput" maxlength="50" placeholder="说点什么…（回车发送）" autocomplete="off" />
+            <button class="btn btn-mini btn-blue" id="btnSend">发送</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="lobby-foot">
+      <button class="btn btn-ghost" id="btnWardrobe2">👕 换装</button>
+      <button class="btn btn-yellow btn-xl" id="btnMain">开始游戏</button>
+      <span class="ready-info" id="readyInfo"></span>
+    </footer>
+  </section>
+
+  <!-- 游戏内 HUD -->
+  <section id="hud" class="hidden">
+    <div id="scoreboard"></div>
+    <div id="topHud"></div>
+    <div id="banner"></div>
+    <div id="toast"></div>
+    <div id="killfeed"></div>
+    <div id="effects"></div>
+    <div id="spectate"></div>
+    <div id="crosshair" class="hidden"></div>
+    <button id="itemSlot" class="hidden" title="使用道具（F）"><span class="ico"></span><b class="key">F</b></button>
+    <div class="hud-buttons">
+      <button class="icon-btn" id="btnView" title="切换第一人称 / 第三人称（V）">🎥</button>
+      <button class="icon-btn" id="btnEmote" title="表情（数字键 1-8）">😀</button>
+      <button class="icon-btn" id="btnPause" title="菜单">☰</button>
+    </div>
+  </section>
+
+  <!-- 结算 -->
+  <section id="scr-results" class="screen hidden">
+    <div class="results-head">
+      <div class="results-title" id="resTitle"></div>
+      <div class="results-sub" id="resSub"></div>
+    </div>
+    <div class="results-body">
+      <div class="awards" id="awards"></div>
+      <div class="panel results-table"><table id="resTable"></table></div>
+    </div>
+    <footer class="results-foot">
+      <button class="btn btn-ghost" id="resLeave">离开房间</button>
+      <button class="btn btn-ghost" id="resBoard">🏆 排行榜</button>
+      <button class="btn btn-ghost" id="btnEmoteRes" title="表情 / 贴图（T 快速嘲讽）">😜 嘲讽</button>
+      <button class="btn btn-blue host-only" id="resLobby">返回房间</button>
+      <button class="btn btn-yellow host-only" id="resAgain">再来一局</button>
+      <span class="wait-host guest-only">等待房主操作…</span>
+    </footer>
+  </section>
+
+  <!-- 排行榜 -->
+  <section id="scr-board" class="screen hidden">
+    <header class="topbar">
+      <button class="btn btn-ghost" id="boardBack">← 返回</button>
+      <h2 class="title">🏆 排行榜</h2>
+      <span class="topbar-spacer"></span>
+    </header>
+    <div class="panel board-panel">
+      <p class="hint">按夺冠次数排名（只统计真人玩家，数据保存在开服的电脑上）</p>
+      <table id="boardTable"></table>
+    </div>
+  </section>
+
+  <!-- 玩法说明 -->
+  <section id="scr-help" class="screen hidden">
+    <header class="topbar">
+      <button class="btn btn-ghost" id="helpBack">← 返回</button>
+      <h2 class="title">玩法说明</h2>
+      <span class="topbar-spacer"></span>
+    </header>
+    <div class="panel help-panel">
+      <div class="tabs" id="helpTabs">
+        <button data-tab="controls" class="on">操作</button>
+        <button data-tab="modes">模式</button>
+        <button data-tab="items">道具</button>
+        <button data-tab="maps">地图</button>
+        <button data-tab="lan">联机</button>
+      </div>
+      <div id="helpBody"></div>
+    </div>
+  </section>
+
+  <!-- 弹窗 / 表情 / 通知 -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card panel">
+      <h3 id="modalTitle"></h3>
+      <div id="modalBody"></div>
+      <div class="modal-actions" id="modalActions"></div>
+    </div>
+  </div>
+  <div id="emotePicker" class="emote-picker hidden"></div>
+  <div id="notice"></div>
+
+  <!-- 手机控制 -->
+  <div id="touchUI" class="hidden">
+    <div id="stick"><div id="knob"></div></div>
+    <button id="jumpBtn">跳跃</button>
+    <button id="dashBtn">冲刺</button>
+    <button id="skillBtn" class="hidden" disabled>震荡</button>
+  </div>
+
+  <div id="loading"><div class="spinner"></div><span>加载中…</span></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

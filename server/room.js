@@ -1,0 +1,1506 @@
+// 房间：大厅管理（房主、准备、队伍、聊天、设置、踢人、掉线重连）+ 比赛流程 + 物理模拟。
+// 服务端权威：客户端只发输入，这里模拟后广播状态。物理在水平面 (x, y) 上进行；
+// 玩家另外有离地高度 z（>= 0）和竖直速度 vz（跳跃 / 被炸飞），只影响碰撞、掉落判定和各模式的"要站在地上"的规则。
+const K = require('./constants');
+const { MAPS } = require('./maps');
+const { MODES } = require('./modes');
+const bots = require('./bots');
+const catalog = require('./catalog');
+const leaderboard = require('./leaderboard');
+const { rand, lerp, clamp, r1, emptyFx, emptyStats, radiusOf, massOf, controllable, ghosted, airborne, fmt } = require('./util');
+
+let nextPlayerId = 1;
+// 玩家的输入：摇杆方向 + 这一帧按下的冲刺 / 跳 / 技能（按下的动作在服务器处理后清掉）
+// fx / fy：冲刺时客户端顺便发来的"我面朝的方向"（站着不动、没按方向键时往这边冲）
+const freshInput = () => ({ x: 0, y: 0, dash: false, jump: false, skill: false, fx: 0, fy: 0 });
+
+class Room {
+  constructor(code, opts = {}) {
+    this.code = code;
+    this.settings = {
+      name: String(opts.name || '').slice(0, 16),
+      public: opts.public !== false,
+      max: K.MAX_PLAYERS,
+      map: 'lava',
+      mode: 'classic',
+      target: 3,
+      botLevel: 1,
+      items: true,
+      floorCollapse: true,
+    };
+    this.players = new Map();
+    this.hostId = null;
+    this.phase = 'lobby'; // lobby | countdown | playing | roundEnd | gameOver
+    this.timer = 0;
+    this.roundTime = 0;
+    this.matchTime = 0;
+    this.round = 0;
+    this.teamScore = [0, 0];
+    this.lastWinner = null;
+    this.winnerTeam = -1;
+    this.roundText = '';
+    this.participants = 0;
+    this.events = [];
+    this.chatLog = [];
+    this.chatSeq = 0;
+    this.kicked = new Set();
+    this.results = null;
+    this.m = {};
+    this.bodies = [];
+    this.nextObj = 1;
+    this.created = Date.now();
+    this.closed = false;
+    this.lastMap = null;
+    this.resetArena();
+  }
+
+  // 当前地图：闯关模式由模式提供关卡地图，其他模式用房间设置里选的地图
+  get map() {
+    return (this.m && this.m.level) || MAPS[this.settings.map];
+  }
+  pickRandomMap() {
+    const ids = Object.keys(MAPS);
+    const choices = ids.length > 1 ? ids.filter((id) => id !== this.lastMap) : ids;
+    this.lastMap = choices[Math.floor(Math.random() * choices.length)];
+    return this.lastMap;
+  }
+  // 地图变了就广播给所有人（换地图、闯关换关卡、回到大厅）
+  syncMap() {
+    const def = this.map.clientDef;
+    if (def === this.sentDef) return;
+    this.sentDef = def;
+    this.broadcast(def);
+  }
+  get mode() {
+    return MODES[this.settings.mode];
+  }
+  get inGame() {
+    return this.phase === 'countdown' || this.phase === 'playing' || this.phase === 'roundEnd';
+  }
+  list() {
+    return [...this.players.values()];
+  }
+  humans() {
+    return this.list().filter((p) => !p.bot);
+  }
+  event(e) {
+    this.events.push(e);
+  }
+
+  // ------------------------------------------------------------------
+  // 发送
+  // ------------------------------------------------------------------
+  send(p, msg) {
+    if (p.ws && p.connected && p.ws.readyState === 1) p.ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
+  }
+  broadcast(msg) {
+    const data = typeof msg === 'string' ? msg : JSON.stringify(msg);
+    for (const p of this.players.values()) this.send(p, data);
+  }
+  // 系统消息：key 是中文模板，p 是参数（客户端按自己的语言翻译）
+  sys(key, p = {}) {
+    this.chat(null, fmt(key, p), key, p);
+  }
+  chat(p, text, key, params) {
+    const msg = { type: 'chat', n: ++this.chatSeq, id: p ? p.id : 0, name: p ? p.name : '', text, sys: !p };
+    if (key) {
+      msg.key = key;
+      msg.p = params;
+    }
+    this.chatLog.push(msg);
+    if (this.chatLog.length > 40) this.chatLog.shift();
+    this.event(msg);
+  }
+
+  // 贴图也进聊天记录（大厅里看得到），客户端收到后在头顶冒出来
+  sticker(p, s) {
+    const now = Date.now();
+    if (!catalog.STICKERS.includes(s) || now - (p.stickerT || 0) < 1500) return false;
+    p.stickerT = now;
+    const msg = { type: 'chat', n: ++this.chatSeq, id: p.id, name: p.name, text: '', sticker: s };
+    this.chatLog.push(msg);
+    if (this.chatLog.length > 40) this.chatLog.shift();
+    this.event(msg);
+    return true;
+  }
+
+  // 机器人偶尔也会嘲讽一下
+  botTaunt(p, list, chance) {
+    if (!p || !p.bot || Math.random() > chance) return;
+    const now = Date.now();
+    if (now - (p.stickerT || 0) < 6000) return;
+    this.sticker(p, list[Math.floor(Math.random() * list.length)]);
+  }
+
+  // ------------------------------------------------------------------
+  // 玩家进出
+  // ------------------------------------------------------------------
+  addPlayer({ name, profile, ws = null, bot = false, token = null }) {
+    const p = {
+      id: nextPlayerId++,
+      kind: 'player',
+      token,
+      name: catalog.sanitizeName(name, bot ? '机器人' : '玩家' + Math.floor(Math.random() * 900 + 100)),
+      profile: catalog.sanitizeProfile(profile),
+      ws,
+      bot,
+      connected: true,
+      dc: 0,
+      afk: false,
+      ready: bot,
+      team: 0,
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      z: 0,
+      vz: 0,
+      floorZ: 0,
+      jumpBuf: 0,
+      coyote: 0,
+      sinceLand: 99, // 离上次落地多久（落地硬直 / 连跳变低用）
+      stompCd: 0,
+      input: freshInput(),
+      dashCd: 0,
+      skillCd: 0,
+      alive: false,
+      falling: 0,
+      respawn: 0,
+      out: false,
+      exploded: false,
+      score: 0,
+      kills: 0,
+      fx: emptyFx(),
+      item: null,
+      lastHitBy: null,
+      lastHitTime: -99,
+      botThink: 0,
+      stats: emptyStats(),
+      chatT: 0,
+      emoteT: 0,
+    };
+    // 重名自动加编号
+    const names = new Set(this.list().map((q) => q.name));
+    if (names.has(p.name)) {
+      let k = 2;
+      while (names.has(`${p.name}${k}`)) k++;
+      p.name = `${p.name}${k}`;
+    }
+    if (this.mode.teams) p.team = this.smallerTeam();
+    this.players.set(p.id, p);
+    if (!bot && this.hostId === null) this.hostId = p.id;
+    // 比赛进行中加入：可复活的模式稍后直接上场，淘汰制下一局再上
+    if (this.inGame && this.mode.respawn) p.respawn = 1.5;
+    this.sys(bot ? '{name}（机器人）加入了房间' : '{name} 加入了房间', { name: p.name });
+    return p;
+  }
+
+  removePlayer(id, reason = 'leave') {
+    const p = this.players.get(id);
+    if (!p) return;
+    if (this.mode.onLeave) this.mode.onLeave(this, p);
+    this.players.delete(id);
+    if (reason === 'kick') {
+      if (p.token) this.kicked.add(p.token);
+      this.send(p, { t: 'kicked', key: '你被房主移出了房间', msg: '你被房主移出了房间' });
+    }
+    const why = { kick: '{name} 被移出了房间', timeout: '{name} 掉线了', leave: '{name} 离开了房间' }[reason] || '{name} 离开了房间';
+    this.sys(why, { name: p.name });
+    if (this.hostId === id) this.pickNewHost();
+    if (!this.humans().length) this.closed = true;
+  }
+
+  pickNewHost() {
+    const cand = this.humans()
+      .filter((p) => p.connected)
+      .sort((a, b) => a.id - b.id)[0];
+    this.hostId = cand ? cand.id : null;
+    if (cand) this.sys('{name} 成为了新房主', { name: cand.name });
+  }
+
+  disconnect(p) {
+    p.connected = false;
+    p.ws = null;
+    p.dc = 0;
+    p.afk = this.inGame;
+    // 房主掉线先等几秒（刷新页面很快就回来），超时再交给别人，见 tick()
+  }
+
+  reconnect(p, ws) {
+    p.ws = ws;
+    p.connected = true;
+    p.dc = 0;
+    p.afk = false;
+    p.input = freshInput();
+    if (this.hostId === null) this.hostId = p.id;
+    this.sys('{name} 重新连接', { name: p.name });
+  }
+
+  smallerTeam() {
+    const n = [0, 0];
+    for (const p of this.players.values()) n[p.team]++;
+    return n[0] <= n[1] ? 0 : 1;
+  }
+
+  balanceTeams() {
+    const list = this.list();
+    const n = [0, 0];
+    for (const p of list) n[p.team]++;
+    // 一边为空，或者两边差距超过 1 人时，从多的一边挪人（优先挪机器人）
+    while (Math.abs(n[0] - n[1]) > 1 || (list.length > 1 && (n[0] === 0 || n[1] === 0))) {
+      const from = n[0] > n[1] ? 0 : 1;
+      const mover = list.filter((p) => p.team === from).sort((a, b) => Number(b.bot) - Number(a.bot))[0];
+      if (!mover) break;
+      mover.team = 1 - from;
+      n[from]--;
+      n[1 - from]++;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 处理客户端消息
+  // ------------------------------------------------------------------
+  handle(p, msg) {
+    // 已经不在房间里的人（被房主踢了 / 掉线太久被移出）旧连接发来的消息一律不理，
+    // 不然被踢的人还能继续在房间里聊天、发贴图、发表情
+    if (this.players.get(p.id) !== p) return;
+    const isHost = p.id === this.hostId;
+    const inLobby = this.phase === 'lobby' || this.phase === 'gameOver';
+    switch (msg.t) {
+      case 'input':
+        p.input.x = clamp(Number(msg.x) || 0, -1, 1);
+        p.input.y = clamp(Number(msg.y) || 0, -1, 1);
+        if (msg.dash || msg.skill) {
+          const fx = clamp(Number(msg.fx) || 0, -1, 1);
+          const fy = clamp(Number(msg.fy) || 0, -1, 1);
+          const fl = Math.hypot(fx, fy);
+          p.input.fx = fl > 0.1 ? fx / fl : 0;
+          p.input.fy = fl > 0.1 ? fy / fl : 0;
+        }
+        if (msg.dash) p.input.dash = true;
+        if (msg.jump) p.input.jump = true;
+        if (msg.skill) p.input.skill = true;
+        p.afk = false;
+        break;
+      case 'profile':
+        if (msg.name !== undefined) {
+          const n = catalog.sanitizeName(msg.name, p.name);
+          if (n !== p.name && !this.list().some((q) => q !== p && q.name === n)) {
+            this.sys('{name} 改名为 {to}', { name: p.name, to: n });
+            p.name = n;
+          }
+        }
+        if (msg.profile) p.profile = catalog.sanitizeProfile(msg.profile);
+        break;
+      case 'ready':
+        if (inLobby) p.ready = !!msg.v;
+        break;
+      case 'chat': {
+        const text = String(msg.text || '')
+          .replace(/[\u0000-\u001f\u007f]/g, '')
+          .trim()
+          .slice(0, K.CHAT_MAX);
+        const now = Date.now();
+        if (text && now - p.chatT > 600) {
+          p.chatT = now;
+          this.chat(p, text);
+        }
+        break;
+      }
+      case 'use':
+        this.useItem(p);
+        break;
+      case 'sticker':
+        this.sticker(p, String(msg.s || ''));
+        break;
+      case 'emote': {
+        const i = Number(msg.i);
+        const now = Date.now();
+        if (Number.isInteger(i) && i >= 0 && i < K.EMOTE_COUNT && now - p.emoteT > 900) {
+          p.emoteT = now;
+          this.event({ type: 'emote', id: p.id, i });
+        }
+        break;
+      }
+      case 'team': {
+        if (!inLobby || !this.mode.teams) break;
+        const target = msg.id && isHost ? this.players.get(msg.id) : p;
+        if (target && (msg.team === 0 || msg.team === 1)) target.team = msg.team;
+        break;
+      }
+      case 'shuffle':
+        if (isHost && inLobby && this.mode.teams) {
+          const list = this.list().sort(() => Math.random() - 0.5);
+          list.forEach((q, i) => (q.team = i % 2));
+          this.sys('房主重新随机分了队');
+        }
+        break;
+      case 'settings':
+        if (isHost && inLobby) {
+          const settings = { ...msg };
+          delete settings.map;
+          this.applySettings(settings);
+        }
+        break;
+      case 'addBot':
+        if (isHost && inLobby && this.players.size < this.settings.max) {
+          const used = new Set(this.list().map((q) => q.name));
+          const pool = msg.lang === 'en' ? K.BOT_NAMES_EN : K.BOT_NAMES;
+          const name = pool.find((n) => !used.has('🤖' + n)) || (msg.lang === 'en' ? 'Bot' : '机器人');
+          const b = this.addPlayer({ name: '🤖' + name, profile: catalog.randomProfile(this.nextObj++), bot: true });
+          b.ready = true;
+        }
+        break;
+      case 'removeBot':
+        if (isHost && inLobby) {
+          const b = this.list()
+            .reverse()
+            .find((q) => q.bot);
+          if (b) this.removePlayer(b.id);
+        }
+        break;
+      case 'kick': {
+        const target = this.players.get(msg.id);
+        if (isHost && target && target !== p) this.removePlayer(target.id, 'kick');
+        break;
+      }
+      case 'host': {
+        const target = this.players.get(msg.id);
+        if (isHost && target && !target.bot && target.connected && target !== p) {
+          this.hostId = target.id;
+          this.sys('{name} 把房主转让给了 {to}', { name: p.name, to: target.name });
+        }
+        break;
+      }
+      case 'start':
+        if (isHost && inLobby) this.tryStart(p, !!msg.force);
+        break;
+      case 'toLobby':
+        if (isHost && this.phase === 'gameOver') this.toLobby();
+        break;
+      case 'abort':
+        // 房主中途结束比赛，所有人回到房间
+        if (isHost && this.inGame) {
+          this.toLobby();
+          this.sys('{name} 结束了这场比赛', { name: p.name });
+        }
+        break;
+    }
+  }
+
+  applySettings(s) {
+    const st = this.settings;
+    if (typeof s.name === 'string') st.name = s.name.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 16);
+    if (typeof s.public === 'boolean') st.public = s.public;
+    if (Number.isInteger(s.max)) st.max = clamp(s.max, Math.max(2, this.players.size), K.MAX_PLAYERS);
+    if (Number.isInteger(s.botLevel)) st.botLevel = clamp(s.botLevel, 0, 2);
+    if (typeof s.items === 'boolean') st.items = s.items;
+    if (typeof s.floorCollapse === 'boolean') st.floorCollapse = s.floorCollapse;
+    if (s.map && MAPS[s.map] && s.map !== st.map) {
+      st.map = s.map;
+      this.resetArena();
+      this.syncMap();
+    }
+    if (s.mode && MODES[s.mode] && s.mode !== st.mode) {
+      st.mode = s.mode;
+      st.target = this.mode.defaultTarget;
+      if (this.mode.teams) this.balanceTeams();
+    }
+    if (Number.isInteger(s.target) && this.mode.targets.includes(s.target)) st.target = s.target;
+  }
+
+  tryStart(host, force) {
+    const need = this.mode.minPlayers || 1;
+    if (this.players.size < need) {
+      const key = '这个模式至少需要 {n} 名玩家（可以添加机器人）';
+      this.send(host, { t: 'error', key, p: { n: need }, msg: fmt(key, { n: need }) });
+      return;
+    }
+    const notReady = this.humans().filter((q) => q.id !== this.hostId && q.connected && !q.ready);
+    if (notReady.length && !force) {
+      this.send(host, { t: 'confirmStart', names: notReady.map((q) => q.name) });
+      return;
+    }
+    this.startMatch();
+  }
+
+  toLobby() {
+    this.phase = 'lobby';
+    this.bodies = [];
+    this.m = {};
+    this.resetArena();
+    this.syncMap();
+    for (const p of this.list()) {
+      p.ready = p.bot;
+      p.alive = false;
+      p.falling = 0;
+      p.respawn = 0;
+      p.exploded = false;
+      p.out = false;
+      p.fx = emptyFx();
+      p.item = null;
+      p.massMul = 1;
+      p.z = p.vz = 0;
+      p.floorZ = 0;
+      p.input = freshInput();
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 地砖与场地
+  // ------------------------------------------------------------------
+  resetArena() {
+    const n = this.map.layout.tiles.length;
+    this.tileState = new Uint8Array(n); // 0 正常 1 预警 2 已塌
+    this.tileTimer = new Float32Array(n);
+    this.collapseStep = 0;
+    this.crackTimer = this.map.collapse.first;
+    this.items = [];
+    this.itemTimer = 3;
+    this.hazards = [];
+    this.traps = [];
+    this.meteors = [];
+    this.meteorTimer = this.map.meteors ? this.map.meteors.first : Infinity;
+  }
+  tileAt(x, y) {
+    return this.map.layout.locate(x, y);
+  }
+  raisedAt(x, y) {
+    const e = this.map.elevation;
+    if (!e) return 0;
+    const { ramp, platform } = e;
+    if (x >= ramp.x0 && x <= ramp.x1 && y >= ramp.y0 && y <= ramp.y1) {
+      const step = Math.min(ramp.steps, Math.floor(((x - ramp.x0) / (ramp.x1 - ramp.x0)) * ramp.steps) + 1);
+      return (e.height * step) / ramp.steps;
+    }
+    return x >= platform.x0 && x <= platform.x1 && y >= platform.y0 && y <= platform.y1 ? e.height : 0;
+  }
+  surfaceAt(x, y, floorZ = 0) {
+    const e = this.map.elevation;
+    let raised = 0;
+    if (e) {
+      const { ramp, platform } = e;
+      if (x >= ramp.x0 && x <= ramp.x1 && y >= ramp.y0 && y <= ramp.y1) raised = this.raisedAt(x, y);
+      // The deck is open underneath; only enter its top from the staircase.
+      else if (floorZ >= e.height - e.height / ramp.steps && x >= platform.x0 && x <= platform.x1 && y >= platform.y0 && y <= platform.y1) raised = e.height;
+    }
+    const pad = this.mode.platformAt && this.mode.platformAt(this, x, y);
+    return pad && floorZ >= pad.z - 0.01 ? Math.max(raised, pad.z) : raised;
+  }
+  supported(x, y, floorZ = 0) {
+    const top = this.surfaceAt(x, y, floorZ);
+    if (floorZ > 0 && top === floorZ) return true;
+    const id = this.tileAt(x, y);
+    return floorZ === 0 && id >= 0 && this.tileState[id] !== 2;
+  }
+  safeAt(x, y) {
+    const id = this.tileAt(x, y);
+    return (id >= 0 && this.tileState[id] === 0) || this.raisedAt(x, y) > 0 || !!(this.mode.platformAt && this.mode.platformAt(this, x, y));
+  }
+  concealed(p) {
+    if (p.z > 0 || p.falling > 0 || p.hanging || Math.hypot(p.vx, p.vy) > 65) return false;
+    return (this.map.bushes || []).some((b) => Math.hypot(p.x - b.x, p.y - b.y) < b.r * 0.72);
+  }
+  updateElevation(p, oldX, oldY) {
+    const oldFloor = p.floorZ || 0;
+    const floor = this.surfaceAt(p.x, p.y, oldFloor);
+    if (airborne(p)) {
+      if (floor > oldFloor && oldFloor + p.z < floor) {
+        p.x = oldX;
+        p.y = oldY;
+        p.vx = p.vy = 0;
+      } else if (floor < oldFloor) {
+        p.z += oldFloor - floor;
+        p.floorZ = floor;
+      }
+      return;
+    }
+    if (floor > oldFloor && floor - oldFloor > this.map.elevation.height / this.map.elevation.ramp.steps + 0.01) {
+      p.x = oldX;
+      p.y = oldY;
+      p.vx = p.vy = 0;
+    } else if (floor < oldFloor) {
+      const drop = oldFloor - floor;
+      const step = this.map.elevation ? this.map.elevation.height / this.map.elevation.ramp.steps : 0;
+      p.z = drop > step + 0.01 ? drop : 0;
+      p.vz = 0;
+      p.floorZ = floor;
+    } else {
+      p.floorZ = floor;
+    }
+  }
+  landingSurface(x, y, above) {
+    const raised = this.raisedAt(x, y);
+    const id = this.tileAt(x, y);
+    const base = id >= 0 && this.tileState[id] !== 2 ? 0 : -Infinity;
+    const pad = this.mode.platformAt && this.mode.platformAt(this, x, y);
+    return Math.max(base, raised <= above ? raised : -Infinity, pad && pad.z <= above ? pad.z : -Infinity);
+  }
+  warnTile(id, time) {
+    if (this.tileState[id] !== 0) return;
+    this.tileState[id] = 1;
+    this.tileTimer[id] = time;
+  }
+  breakTile(id) {
+    if (!this.settings.floorCollapse) return;
+    const hz = this.mode.hazards;
+    this.tileState[id] = 2;
+    // 非淘汰模式里地砖会重新长回来（模式可以指定某些地砖永久塌掉）
+    this.tileTimer[id] = hz.collapse || (this.mode.keepBroken && this.mode.keepBroken(this, id)) ? Infinity : 9;
+    this.items = this.items.filter((it) => this.tileAt(it.x, it.y) !== id);
+    if (this.mode.onTileBreak) this.mode.onTileBreak(this, id);
+  }
+  nextRingCollapse() {
+    const c = this.map.collapse;
+    if (!this.settings.floorCollapse || c.type !== 'rings' || !this.mode.hazards.collapse) return Infinity;
+    if (this.collapseStep >= this.map.layout.layers - c.keep) return Infinity;
+    return c.first + this.collapseStep * c.interval - this.roundTime;
+  }
+  updateArena(dt) {
+    const c = this.map.collapse;
+    const hz = this.mode.hazards;
+    const tiles = this.map.layout.tiles;
+    for (let i = 0; i < tiles.length; i++) {
+      if (this.tileState[i] === 1) {
+        this.tileTimer[i] -= dt;
+        if (this.tileTimer[i] <= 0) this.breakTile(i);
+      } else if (this.tileState[i] === 2 && this.tileTimer[i] !== Infinity) {
+        this.tileTimer[i] -= dt;
+        if (this.tileTimer[i] <= 0) this.tileState[i] = 0;
+      }
+    }
+    if (c.type === 'rings') {
+      const next = this.nextRingCollapse();
+      if (next <= c.warn) {
+        for (let i = 0; i < tiles.length; i++) if (tiles[i].layer === this.collapseStep) this.warnTile(i, Math.max(0, next));
+        if (next <= 0) {
+          this.collapseStep++;
+          this.event({ type: 'collapse' });
+        }
+      }
+    } else if (this.settings.floorCollapse && c.type === 'random' && hz.cracks !== 'none') {
+      this.crackTimer -= dt;
+      if (this.crackTimer <= 0) {
+        this.crackTimer = lerp(c.interval[0], c.interval[1], this.roundTime / 45) * (hz.collapse ? 1 : 1.6);
+        const ok = [];
+        for (let i = 0; i < tiles.length; i++) if (this.tileState[i] === 0) ok.push(i);
+        if (ok.length > c.minTiles) {
+          const maxL = this.map.layout.layers;
+          const w = ok.map((i) => Math.pow(maxL - tiles[i].layer, 2));
+          let r = Math.random() * w.reduce((a, b) => a + b, 0);
+          let pick = ok[0];
+          for (let k = 0; k < ok.length; k++) {
+            r -= w[k];
+            if (r <= 0) {
+              pick = ok[k];
+              break;
+            }
+          }
+          this.warnTile(pick, c.warn);
+        }
+      }
+    }
+  }
+
+  // 随机挑一块安全地砖（偏向中心）
+  safeSpot(avoidPlayers = true) {
+    const tiles = this.map.layout.tiles;
+    const maxL = this.map.layout.layers;
+    const cands = [];
+    const bodies = this.activeBodies();
+    for (let i = 0; i < tiles.length; i++) {
+      if (this.tileState[i] !== 0) continue;
+      const t = tiles[i];
+      if (avoidPlayers && bodies.some((b) => Math.hypot(b.x - t.cx, b.y - t.cy) < radiusOf(b) + 60)) continue;
+      if (this.meteors.some((m) => Math.hypot(m.x - t.cx, m.y - t.cy) < m.r + 30)) continue;
+      if ((this.map.bumpers || []).some((b) => Math.hypot(b.x - t.cx, b.y - t.cy) < b.r + 40)) continue;
+      cands.push({ t, w: 1 + t.layer / maxL });
+    }
+    if (!cands.length) return null;
+    let r = Math.random() * cands.reduce((s, c) => s + c.w, 0);
+    for (const c of cands) {
+      r -= c.w;
+      if (r <= 0) return c.t;
+    }
+    return cands[0].t;
+  }
+
+  activeBodies() {
+    const out = [];
+    for (const p of this.players.values()) if (p.alive && !p.falling) out.push(p);
+    for (const b of this.bodies) if (b.alive && !b.falling) out.push(b);
+    return out;
+  }
+
+  // 敌我关系：团队模式按队伍，协作模式里只有 Boss 和小怪是敌人，球是中立的
+  isEnemy(a, b) {
+    if (a === b || a.kind === 'ball' || b.kind === 'ball') return false;
+    const ap = a.kind === 'player';
+    const bp = b.kind === 'player';
+    if (ap && bp) {
+      if (this.mode.coop) return false;
+      if (this.mode.teams) return a.team !== b.team;
+      return true;
+    }
+    return ap !== bp;
+  }
+
+  hitBy(victim, attacker) {
+    if (!attacker || attacker.kind !== 'player') return;
+    victim.lastHitBy = attacker.id;
+    victim.lastHitTime = this.roundTime;
+  }
+
+  // 以 (x, y) 为中心的冲击波；filter 为 true 的物体才受影响。
+  // lift > 0：顺便把玩家往上掀（炸弹、陨石），离中心越近掀得越高
+  knock(x, y, radius, power, owner, filter, lift = 0) {
+    for (const o of this.activeBodies()) {
+      if (o === owner || ghosted(o) || (filter && !filter(o))) continue;
+      const dx = o.x - x;
+      const dy = o.y - y;
+      const d = Math.hypot(dx, dy);
+      if (d > radius) continue;
+      const k = (power * (1 - d / radius) + 250) / massOf(o);
+      const nx = d > 0 ? dx / d : Math.random() - 0.5;
+      const ny = d > 0 ? dy / d : Math.random() - 0.5;
+      o.vx += nx * k;
+      o.vy += ny * k;
+      if (lift > 0 && o.kind === 'player' && !o.hanging) o.vz = Math.max(o.vz, (lift * (0.5 + 0.5 * (1 - d / radius))) / Math.sqrt(massOf(o)));
+      this.hitBy(o, owner);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 比赛流程
+  // ------------------------------------------------------------------
+  startMatch() {
+    this.settings.map = this.pickRandomMap();
+    for (const p of this.list()) {
+      p.score = 0;
+      p.kills = 0;
+      p.stats = emptyStats();
+      p.out = false;
+    }
+    this.round = 0;
+    this.matchTime = 0;
+    this.teamScore = [0, 0];
+    this.winnerTeam = -1;
+    this.results = null;
+    this.m = {};
+    this.bodies = [];
+    if (this.mode.setup) this.mode.setup(this);
+    this.startRound();
+    this.event({ type: 'matchStart' });
+  }
+
+  startRound() {
+    const list = this.list();
+    if (this.mode.beforeRound) this.mode.beforeRound(this);
+    this.resetArena();
+    this.syncMap();
+    this.bodies = [];
+    this.phase = 'countdown';
+    this.timer = this.round > 0 && this.mode.id === 'football' ? 2 : K.COUNTDOWN;
+    this.roundTime = 0;
+    this.round++;
+    this.lastWinner = null;
+    this.winnerTeam = -1;
+    this.roundText = '';
+    this.roundKey = '';
+    this.roundP = {};
+    this.participants = list.length;
+    const order = this.mode.teams ? [...list].sort((a, b) => a.team - b.team) : list;
+    const spawnR = Math.min(230, this.map.layout.radius * 0.5);
+    const offset = Math.random() * Math.PI * 2;
+    order.forEach((p, i) => {
+      let pos;
+      if (this.mode.spawn) pos = this.mode.spawn(this, p, i, order);
+      else {
+        const a = offset + (i / order.length) * Math.PI * 2;
+        pos = { x: Math.cos(a) * spawnR, y: Math.sin(a) * spawnR };
+      }
+      if (!this.safeAt(pos.x, pos.y) || (this.map.bumpers || []).some((b) => Math.hypot(b.x - pos.x, b.y - pos.y) < b.r + 30)) {
+        const t = this.safeSpot(false);
+        if (t) pos = { x: t.cx, y: t.cy };
+      }
+      this.placePlayer(p, pos.x, pos.y);
+    });
+    if (this.mode.startRound) this.mode.startRound(this);
+  }
+
+  placePlayer(p, x, y) {
+    p.x = x;
+    p.y = y;
+    p.floorZ = this.raisedAt(x, y);
+    p.vx = p.vy = 0;
+    p.alive = !p.out;
+    p.falling = 0;
+    p.respawn = 0;
+    p.exploded = false;
+    p.dashCd = 0;
+    p.skillCd = 0;
+    p.fx = emptyFx();
+    p.item = null;
+    p.massMul = 1;
+    p.hanging = false;
+    p.hangT = 0;
+    p.lastHitBy = null;
+    p.z = p.vz = 0;
+    p.jumpBuf = 0;
+    p.coyote = K.JUMP_COYOTE;
+    p.sinceLand = 99;
+    p.tiredHop = false;
+    p.stompChain = 0;
+    p.stompCd = 0;
+    p.input = freshInput();
+  }
+
+  endRound({ winnerId = null, winnerTeam = -1, key = '', p = {} }) {
+    this.phase = 'roundEnd';
+    this.timer = this.mode.roundEndDelay || K.ROUND_END_DELAY;
+    this.lastWinner = winnerId;
+    this.winnerTeam = winnerTeam;
+    this.roundText = fmt(key, p);
+    this.roundKey = key;
+    this.roundP = p;
+    this.event({ type: 'roundEnd', id: winnerId, team: winnerTeam });
+  }
+
+  endMatch(winners, extra = {}) {
+    this.phase = 'gameOver';
+    const winSet = new Set(winners);
+    const mode = this.mode;
+    const list = this.list();
+    const rows = list
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        profile: p.profile,
+        bot: p.bot,
+        team: p.team,
+        score: r1(p.score),
+        kills: p.kills,
+        falls: p.stats.falls,
+        hits: p.stats.hits,
+        items: p.stats.items,
+        won: winSet.has(p.id),
+      }))
+      .sort((a, b) => Number(b.won) - Number(a.won) || b.score - a.score || b.kills - a.kills);
+    // 颁奖
+    const awards = [];
+    const best = (key, icon, title, unit, min = 1, lowest = false) => {
+      const vals = list.map((p) => ({ p, v: key(p) }));
+      const pick = vals.sort((a, b) => (lowest ? a.v - b.v : b.v - a.v))[0];
+      if (pick && (lowest || pick.v >= min)) {
+        const n = Math.round(pick.v * 10) / 10;
+        awards.push({ icon, title, id: pick.p.id, n, unit: unit.trim(), value: `${n}${unit}` });
+      }
+    };
+    best((p) => p.kills, '💥', '击飞王', ' 次');
+    best((p) => p.stats.hits, '🔨', '大力士', ' 次重击', 3);
+    best((p) => p.stats.items, '🎁', '道具达人', ' 个', 2);
+    if (mode.id === 'football') best((p) => p.stats.goals, '⚽', '射手王', ' 球');
+    if (mode.id === 'paint') best((p) => p.stats.tiles, '🎨', '涂色大师', ' 块');
+    if (mode.id === 'boss') best((p) => p.stats.dmg / 100, '🤖', '最佳输出', ' 点');
+    if (mode.id === 'crown') best((p) => p.stats.crown, '👑', '戴冠最久', ' 秒');
+    if (mode.id === 'potato') best((p) => p.stats.passes, '💣', '传球高手', ' 次');
+    if (mode.id === 'rope') {
+      best((p) => p.stats.keys, '🔑', '开锁达人', ' 把');
+      best((p) => p.stats.plates, '🟢', '机关达人', ' 次');
+      best((p) => p.stats.saves, '⛓️', '救援高手', ' 次'); // 🪢 在 Windows 10 上显示成方框
+    }
+    if (list.length > 1) best((p) => p.stats.falls, '🛡️', '不倒翁', ' 次掉落', 0, true);
+    this.winnerTeam = extra.winnerTeam !== undefined ? extra.winnerTeam : this.winnerTeam;
+    this.results = {
+      mode: mode.id,
+      map: this.settings.map,
+      winners,
+      winnerTeam: mode.teams ? this.winnerTeam : -1,
+      teamScore: this.teamScore.slice(),
+      coop: extra.coop || null,
+      text: extra.text || '',
+      hunterId: extra.hunterId || null,
+      duration: Math.round(this.matchTime),
+      rows,
+      awards,
+    };
+    leaderboard.record(list.filter((p) => !p.bot).map((p) => ({ name: p.name, won: winSet.has(p.id), kos: p.kills })));
+    this.event({ type: 'matchEnd' });
+  }
+
+  // ------------------------------------------------------------------
+  // 每帧
+  // ------------------------------------------------------------------
+  tick(dt) {
+    for (const p of this.list()) {
+      if (p.bot || p.connected) continue;
+      p.dc += dt;
+      if (p.id === this.hostId && p.dc > K.HOST_DC_GRACE && p.dc - dt <= K.HOST_DC_GRACE) this.pickNewHost();
+      if (p.dc > (this.inGame ? K.GAME_DC_GRACE : K.LOBBY_DC_GRACE)) this.removePlayer(p.id, 'timeout');
+    }
+    if (this.phase === 'countdown') {
+      this.timer -= dt;
+      // 倒计时里按的冲刺 / 跳不留到开局那一刻（不然狂按空格的人一开局就蹦起来）
+      for (const p of this.players.values()) p.input.dash = p.input.jump = p.input.skill = false;
+      if (this.timer <= 0) this.phase = 'playing';
+      return;
+    }
+    if (this.phase === 'playing' || this.phase === 'roundEnd') this.simulate(dt);
+  }
+
+  simulate(dt) {
+    const mode = this.mode;
+    if (this.phase === 'roundEnd') {
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        const over = mode.matchOver ? mode.matchOver(this) : null;
+        if (over) this.endMatch(over.winners, over);
+        else this.startRound();
+        return;
+      }
+    }
+    const playing = this.phase === 'playing';
+
+    if (playing) {
+      this.roundTime += dt;
+      this.matchTime += dt;
+      this.updateArena(dt);
+      if (mode.beforePhysics) mode.beforePhysics(this, dt);
+      if (this.settings.items && !mode.noItems) {
+        this.itemTimer -= dt;
+        if (this.itemTimer <= 0) {
+          this.itemTimer = rand(3.5, 5.5);
+          if (this.items.length < K.ITEM_MAX) this.spawnItem();
+        }
+      }
+      this.updateMeteorSpawn(dt);
+    }
+
+    const active = this.activeBodies();
+    const phys = this.map.physics;
+
+    // 控制 + 加速 + 冲刺 + 阻尼
+    for (const b of active) {
+      for (const k of Object.keys(b.fx)) b.fx[k] = Math.max(0, b.fx[k] - dt);
+      if (b.kind === 'player') {
+        if ((b.bot || b.afk || !b.connected) && playing) bots.think(this, b, dt);
+        this.movePlayer(b, dt, playing);
+      } else if (b.kind !== 'ball') {
+        if (playing && mode.control) mode.control(this, b, dt);
+        if (controllable(b)) {
+          b.vx += b.input.x * b.accel * dt;
+          b.vy += b.input.y * b.accel * dt;
+        }
+      }
+      let damping = b.kind === 'ball' ? phys.ballDamping : b.damping ? b.damping * (phys.damping / 2.4) : phys.damping;
+      if (b.fx.slip > 0) damping = 0.35;
+      else if (b.fx.frozen > 0) damping = 0.8;
+      else if (airborne(b)) damping *= K.AIR_DAMPING;
+      const damp = Math.max(0, 1 - damping * dt);
+      b.vx *= damp;
+      b.vy *= damp;
+    }
+    for (const b of active) {
+      const oldX = b.x;
+      const oldY = b.y;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      if (b.kind === 'player') {
+        this.updateElevation(b, oldX, oldY);
+        this.fly(b, dt);
+      }
+    }
+
+    this.collide(active);
+    this.applyBumpers(active);
+    if (mode.constrain) mode.constrain(this, active, dt, playing);
+    this.updateTornados(active, dt);
+    this.updateTraps(active, dt);
+    this.updateMeteors(active, dt);
+
+    if (playing) {
+      for (const p of active) {
+        if (p.kind !== 'player') continue;
+        if (p.item) continue; // 道具栏满了：先用掉手上的才能再捡
+        const r = radiusOf(p) + K.ITEM_R;
+        const idx = this.items.findIndex((it) => Math.hypot(it.x - p.x, it.y - p.y) < r);
+        if (idx >= 0) {
+          const [item] = this.items.splice(idx, 1);
+          p.item = item.type;
+          this.event({ type: 'grab', id: p.id, item: item.type, x: r1(item.x), y: r1(item.y) });
+        }
+      }
+      if (mode.update) mode.update(this, dt);
+      if (this.phase !== 'playing') return;
+    }
+
+    this.updateFalls(active, dt, playing);
+    if (this.phase === 'playing' && mode.check) mode.check(this);
+  }
+
+  movePlayer(p, dt, playing) {
+    const ctrl = controllable(p);
+    // 一局结束后的停顿里不再接受操作，大家滑行停下（否则机器人会沿着最后的方向一直走）
+    // 被绳子吊在边上的时候也动不了，只能等队友拉上来
+    let ix = ctrl && playing && !p.hanging ? p.input.x : 0;
+    let iy = ctrl && playing && !p.hanging ? p.input.y : 0;
+    const il = Math.hypot(ix, iy);
+    if (il > 1) {
+      ix /= il;
+      iy /= il;
+    }
+    const phys = this.map.physics;
+    const air = airborne(p);
+    const groundAccel = phys.accel * K.MOVE_SPEED_MUL * (p.fx.speed > 0 ? 1.7 : 1) * (this.mode.accelMul ? this.mode.accelMul(this, p) : 1);
+    const accel = air ? groundAccel * K.AIR_ACCEL : groundAccel;
+    this.steer(p, ix, iy, groundAccel, dt, air ? K.AIR_GRIP : 1);
+    p.vx += ix * accel * dt;
+    p.vy += iy * accel * dt;
+    p.dashCd = Math.max(0, p.dashCd - dt);
+    p.skillCd = Math.max(0, p.skillCd - dt);
+    p.stompCd = Math.max(0, p.stompCd - dt);
+    p.sinceLand = Math.min(99, (p.sinceLand ?? 99) + dt);
+    // 跳：按下后先存 0.12 秒，站在地上（或刚走出边缘的土狼时间里）就起跳；空中不能二段跳。
+    // 刚落地的硬直里按的跳不会过期，硬直一过就跳（连按也不会"吞键"）
+    const recovering = !air && p.sinceLand < K.JUMP_RECOVER;
+    if (p.input.jump) p.jumpBuf = K.JUMP_BUFFER;
+    else if (!recovering) p.jumpBuf = Math.max(0, p.jumpBuf - dt);
+    p.input.jump = false;
+    if (p.input.skill && playing && ctrl && !p.hanging && this.mode.skill) this.mode.skill(this, p, { x: p.input.fx, y: p.input.fy });
+    p.input.skill = false;
+    if (p.jumpBuf > 0 && playing && ctrl && !p.hanging && !air && !recovering && p.coyote > 0) this.jump(p);
+    if (p.input.dash && p.dashCd <= 0 && playing && ctrl && !p.hanging) {
+      let dx = ix;
+      let dy = iy;
+      if (Math.hypot(dx, dy) < 0.1) {
+        // 没按方向键：往面朝的方向冲（第一人称就是准星的方向；第三人称角色本来就面朝移动方向）。
+        // 旧客户端没发朝向：顺着现在滑的方向冲，站着不动就冲不出去
+        const sp = Math.hypot(p.vx, p.vy);
+        const face = Math.hypot(p.input.fx, p.input.fy) > 0.5;
+        dx = face ? p.input.fx : sp > 1 ? p.vx / sp : 0;
+        dy = face ? p.input.fy : sp > 1 ? p.vy / sp : 0;
+      }
+      const dl = Math.hypot(dx, dy);
+      if (dl > 0) {
+        p.vx += (dx / dl) * K.DASH_IMPULSE;
+        p.vy += (dy / dl) * K.DASH_IMPULSE;
+        p.dashCd = p.fx.speed > 0 ? K.DASH_COOLDOWN * 0.45 : K.DASH_COOLDOWN;
+        p.dashN = (p.dashN || 0) + 1; // 第几次冲刺、什么时候冲的（机器人按这个判断"同一次冲刺"）
+        p.dashT = this.roundTime;
+        this.event({ type: 'dash', id: p.id, z: r1(p.z) });
+      }
+    }
+    p.input.dash = false;
+    p.input.fx = p.input.fy = 0;
+    // 闯关模式：空中的水平速度有上限，不能靠"冲刺 + 跳"直接飞过没放下的吊桥。
+    // 上限不低于这张地图的跑步极速（冰面跑得比 480 快）：只卡冲刺多出来的速度，正常跑着起跳不会被"刹车"
+    const cap = this.mode.airSpeedCap ? Math.max(this.mode.airSpeedCap, (phys.accel * K.MOVE_SPEED_MUL) / phys.damping) : 0;
+    if (cap && airborne(p)) {
+      const sp = Math.hypot(p.vx, p.vy);
+      if (sp > cap) {
+        p.vx *= cap / sp;
+        p.vy *= cap / sp;
+      }
+    }
+  }
+
+  // 起跳。落地后很快又跳（连跳）只有 78% 的起跳速度，而且这一跳落到别人头上不算踩头（只是普通地碰一下）：
+  // 不然一直按跳的人每次落下来都是一次"免费踩头"，冲过来撞他的人反而被踩开
+  jump(p) {
+    p.tiredHop = p.sinceLand < K.JUMP_TIRED;
+    p.vz = K.JUMP_V * (p.tiredHop ? K.JUMP_TIRED_V : 1);
+    p.jumpBuf = 0;
+    p.coyote = 0;
+    this.event({ type: 'jump', id: p.id });
+  }
+
+  // 竖直方向：重力 + 落地。落地那一刻发一个事件（客户端扬尘、挤扁、音效）
+  fly(p, dt) {
+    if (!airborne(p)) return;
+    // 不管是自己跳的还是被炸飞 / 踩头弹起来的，离地之后就没有土狼时间了（落在洞上直接掉，不能在洞上再起跳）
+    p.coyote = 0;
+    const floorZ = p.floorZ || 0;
+    const before = floorZ + p.z;
+    p.vz -= K.GRAVITY * dt;
+    p.z += p.vz * dt;
+    // The raised deck has an open underside; stop base-level jumps before the character clips through it.
+    const e = this.map.elevation;
+    if (e && floorZ === 0 && p.vz > 0 && p.x >= e.platform.x0 && p.x <= e.platform.x1 && p.y >= e.platform.y0 && p.y <= e.platform.y1) {
+      const maxZ = Math.max(0, e.height - 18 - 60);
+      if (p.z > maxZ) {
+        p.z = maxZ;
+        p.vz = 0;
+      }
+    }
+    if (p.vz >= 0) return;
+    const above = (p.floorZ || 0) + p.z;
+    const landing = this.landingSurface(p.x, p.y, before);
+    if (landing > -Infinity && above <= landing) {
+      p.floorZ = landing;
+      p.z = 0;
+    } else if (p.z > 0) return;
+    else p.floorZ = 0;
+    const impact = -p.vz;
+    p.z = 0;
+    p.vz = 0;
+    p.sinceLand = 0;
+    p.tiredHop = false;
+    p.stompChain = 0;
+    // g：落在地面上（落在洞上时客户端不扬尘）
+    this.event({ type: 'land', id: p.id, v: Math.round(impact), x: r1(p.x), y: r1(p.y), g: this.supported(p.x, p.y, p.floorZ) ? 1 : 0 });
+  }
+
+  // 转向抓地力：以前只能靠阻尼慢慢消掉"往旁边 / 往后"的速度，急转弯像开船。
+  // 按着方向键时，把偏离输入方向的速度额外刹掉一部分；冲刺、被撞飞（速度远超跑步极速）时不生效，
+  // 保留撞击和冲刺的手感；冰面阻尼小，抓地力按比例变弱；踩到香蕉 / 被冻住时没有抓地力
+  // grip：抓地力倍率（空中只有 K.AIR_GRIP）
+  steer(p, ix, iy, accel, dt, grip = 1) {
+    const il = Math.hypot(ix, iy);
+    if (il < 0.2 || p.fx.slip > 0 || p.fx.frozen > 0) return;
+    const phys = this.map.physics;
+    const topSpeed = accel / phys.damping;
+    const speed = Math.hypot(p.vx, p.vy);
+    // 速度 ≤ 1.15 倍极速时满抓地力，到 1.6 倍极速（冲刺 / 被撞）时降到 0
+    const k = Math.min(1, Math.max(0, (1.6 * topSpeed - speed) / (0.45 * topSpeed)));
+    if (k <= 0) return;
+    const ice = (phys.damping / 2.4) * grip;
+    const dx = ix / il;
+    const dy = iy / il;
+    const along = p.vx * dx + p.vy * dy;
+    const sideX = p.vx - along * dx;
+    const sideY = p.vy - along * dy;
+    // 横向速度按 K.STEER_GRIP/秒 衰减
+    const side = Math.max(0, 1 - K.STEER_GRIP * ice * k * il * dt);
+    let nextAlong = along;
+    // 往反方向跑时额外刹车，掉头更快
+    if (along < 0) nextAlong = Math.min(0, along + K.STEER_BRAKE * ice * k * il * dt);
+    p.vx = nextAlong * dx + sideX * side;
+    p.vy = nextAlong * dy + sideY * side;
+  }
+
+  // 物体两两碰撞（考虑体重；幽灵穿透）。
+  // 高度也算进去：两个球在空间里真的碰到才算（跳起来能从冲过来的人头顶越过去），
+  // 从上面落到别人头上是"踩头"：自己弹起来，对方被轻轻挤开
+  collide(active) {
+    for (let i = 0; i < active.length; i++) {
+      for (let j = i + 1; j < active.length; j++) {
+        const a = active[i];
+        const b = active[j];
+        if (ghosted(a) || ghosted(b)) continue;
+        const ra = radiusOf(a);
+        const rb = radiusOf(b);
+        const minD = ra + rb;
+        // 脚底的高度差（球、Boss、小怪没有 z，当作站在地上）。
+        // 用脚底而不是球心：站在地上的两个物体不管大小都按水平距离碰（Boss、变大的人碰撞范围和以前一样），
+        // 有人离地时像两个等大的球那样，水平方向要靠得更近才碰得到
+        const az = (a.floorZ || 0) + (a.z || 0);
+        const bz = (b.floorZ || 0) + (b.z || 0);
+        const dz = bz - az;
+        if (Math.abs(dz) >= minD) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const d = Math.hypot(dx, dy);
+        // 有高度差时，水平方向要靠得更近才碰得到
+        const reach = dz ? Math.sqrt(minD * minD - dz * dz) : minD;
+        if (d === 0 || d >= reach) continue;
+        if (a.kind === 'player' && b.kind === 'player' && Math.abs(dz) > minD * 0.6) {
+          const top = dz > 0 ? b : a;
+          const low = top === a ? b : a;
+          const closing = low.vz - top.vz; // 上面的人往下落得比下面的人快
+          if (closing > 60 && low.stompCd <= 0 && !top.tiredHop && (top.stompChain || 0) < K.STOMP_CHAIN) {
+            this.stomp(top, low, closing, (low.x - top.x) / d, (low.y - top.y) / d, minD, d);
+            continue;
+          }
+        }
+        const nx = dx / d;
+        const ny = dy / d;
+        const ima = 1 / massOf(a);
+        const imb = 1 / massOf(b);
+        const share = ima / (ima + imb);
+        const overlap = reach - d;
+        a.x -= nx * overlap * share;
+        a.y -= ny * overlap * share;
+        b.x += nx * overlap * (1 - share);
+        b.y += ny * overlap * (1 - share);
+        const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+        if (rel <= 0) continue;
+        // 球弹一点；Boss / 小怪撞起来更"实"（玩家撞上去不会被自己的力道弹飞）；玩家之间最弹
+        // 协作模式里队友之间只是轻轻挤一下，不会把队友撞下去
+        let e = K.RESTITUTION;
+        if (a.kind === 'ball' || b.kind === 'ball') e = 1.3;
+        else if (a.kind === 'boss' || b.kind === 'boss') e = 0.3;
+        else if (a.kind === 'minion' || b.kind === 'minion') e = 1.1;
+        else if (this.mode.coop) e = 0.3;
+        const jImp = ((1 + e) * rel) / (ima + imb);
+        a.vx -= jImp * ima * nx;
+        a.vy -= jImp * ima * ny;
+        b.vx += jImp * imb * nx;
+        b.vy += jImp * imb * ny;
+        this.hitBy(a, b);
+        this.hitBy(b, a);
+        if (rel > 150 && (a.kind === 'player' || b.kind === 'player')) {
+          // 速度快的一方算"出手"的人
+          const va = Math.hypot(a.vx, a.vy);
+          const vb = Math.hypot(b.vx, b.vy);
+          const striker = rel > K.STRONG_HIT ? (va >= vb ? b : a) : null;
+          if (striker && striker.kind === 'player') striker.stats.hits++;
+          const ev = { type: 'hit', a: a.id, b: b.id, x: r1((a.x + b.x) / 2), y: r1((a.y + b.y) / 2), power: Math.round(rel), nx: r1(nx), ny: r1(ny) };
+          // 在空中撞到的：带上高度，客户端把火花画在撞的地方
+          const hz = (az + bz) / 2;
+          if (hz > 1) ev.z = r1(hz);
+          this.event(ev);
+        }
+        if (this.mode.onCollide) this.mode.onCollide(this, a, b, rel);
+      }
+    }
+  }
+
+  // 踩头：上面的人弹起来；下面的人被轻轻挤开（不会被一脚踩下场），算"被他碰过"（掉下去算他击飞）
+  stomp(top, low, closing, nx, ny, minD, d) {
+    // 摆到刚好贴着对方头顶的高度
+    top.z = Math.max(top.z, (low.floorZ || 0) + (low.z || 0) + Math.sqrt(Math.max(0, minD * minD - d * d)) - (top.floorZ || 0));
+    top.stompChain = (top.stompChain || 0) + 1;
+    top.vz = K.STOMP_BOUNCE * (top.stompChain > 1 ? 0.75 : 1);
+    // 协作模式（Boss、闯关）里踩到的是队友：只轻轻碰一下，别把队友从窄桥上挤下去
+    const push = (K.STOMP_PUSH * (this.mode.coop ? 0.3 : 1)) / massOf(low);
+    low.vx += nx * push;
+    low.vy += ny * push;
+    if (low.vz > 0) low.vz = 0; // 在空中被踩：往下掉
+    low.stompCd = K.STOMP_COOLDOWN;
+    this.hitBy(low, top);
+    this.event({ type: 'stomp', a: top.id, b: low.id, x: r1(low.x), y: r1(low.y) });
+    if (this.mode.onCollide) this.mode.onCollide(this, top, low, closing);
+  }
+
+  applyBumpers(active) {
+    (this.map.bumpers || []).forEach((bp, bi) => {
+      for (const p of active) {
+        if ((p.floorZ || 0) + p.z > bp.r * 1.2) continue; // 从软糖上面跳过去
+        const dx = p.x - bp.x;
+        const dy = p.y - bp.y;
+        const d = Math.hypot(dx, dy);
+        const minD = bp.r + radiusOf(p);
+        if (d === 0 || d >= minD) continue;
+        const nx = dx / d;
+        const ny = dy / d;
+        p.x = bp.x + nx * minD;
+        p.y = bp.y + ny * minD;
+        const vn = p.vx * nx + p.vy * ny;
+        const out = Math.max(420, -vn * 1.5) / Math.sqrt(massOf(p));
+        p.vx += (out - vn) * nx;
+        p.vy += (out - vn) * ny;
+        this.event({ type: 'bump', i: bi, x: r1(bp.x + nx * bp.r), y: r1(bp.y + ny * bp.r) });
+      }
+    });
+  }
+
+  // 龙卷风：四处游走，把靠近的人卷起来甩出去
+  updateTornados(active, dt) {
+    for (const h of this.hazards) {
+      h.life -= dt;
+      h.a += rand(-2, 2) * dt;
+      if (Math.hypot(h.x, h.y) > this.map.layout.radius * 0.7) h.a = Math.atan2(-h.y, -h.x) + rand(-0.5, 0.5);
+      h.x += Math.cos(h.a) * 130 * dt;
+      h.y += Math.sin(h.a) * 130 * dt;
+      const owner = this.players.get(h.owner);
+      for (const p of active) {
+        if (p === owner || ghosted(p) || (owner && p.kind === 'player' && !this.isEnemy(owner, p))) continue;
+        const dx = p.x - h.x;
+        const dy = p.y - h.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 95 || d === 0) continue;
+        const k = (1 - d / 95) / massOf(p);
+        p.vx += ((-dy / d) * 2400 + (dx / d) * 1300) * k * dt;
+        p.vy += ((dx / d) * 2400 + (dy / d) * 1300) * k * dt;
+        this.hitBy(p, owner);
+      }
+    }
+    this.hazards = this.hazards.filter((h) => h.life > 0);
+  }
+
+  updateTraps(active, dt) {
+    for (const tr of this.traps) {
+      tr.arm -= dt;
+      tr.life -= dt;
+      for (const p of active) {
+        // 香蕉皮只会让站在地上的人滑倒（跳过去就没事）
+        if (p.kind === 'ball' || (p.id === tr.owner && tr.arm > 0) || ghosted(p) || tr.life <= 0 || p.z > 4) continue;
+        if (Math.hypot(p.x - tr.x, p.y - tr.y) < radiusOf(p) + 14) {
+          tr.life = 0;
+          p.fx.slip = K.SLIP_TIME;
+          const sp = Math.hypot(p.vx, p.vy) || 1;
+          p.vx += (p.vx / sp) * 250;
+          p.vy += (p.vy / sp) * 250;
+          const owner = this.players.get(tr.owner);
+          if (owner && owner !== p) this.hitBy(p, owner);
+          this.event({ type: 'slip', id: p.id, x: r1(tr.x), y: r1(tr.y) });
+        }
+      }
+    }
+    this.traps = this.traps.filter((t) => t.life > 0);
+  }
+
+  updateMeteorSpawn(dt) {
+    const mc = this.map.meteors;
+    if (!mc || !this.mode.hazards.meteors) return;
+    this.meteorTimer -= dt;
+    if (this.meteorTimer > 0) return;
+    this.meteorTimer = lerp(mc.interval[0], mc.interval[1], this.roundTime / 50) * (this.mode.id === 'football' ? 1.8 : 1);
+    const alive = this.list().filter((p) => p.alive && !p.falling);
+    let x;
+    let y;
+    // 一半概率瞄准某个玩家附近
+    if (alive.length && Math.random() < 0.5) {
+      const v = alive[Math.floor(Math.random() * alive.length)];
+      x = v.x + rand(-60, 60);
+      y = v.y + rand(-60, 60);
+    } else {
+      const t = this.safeSpot(false);
+      x = t ? t.cx : 0;
+      y = t ? t.cy : 0;
+    }
+    if (this.tileAt(x, y) >= 0) this.meteors.push({ id: this.nextObj++, x, y, t: mc.warn, r: mc.radius });
+  }
+
+  updateMeteors(active, dt) {
+    for (const m of this.meteors) {
+      m.t -= dt;
+      if (m.t > 0) continue;
+      this.event({ type: 'meteor', x: r1(m.x), y: r1(m.y), r: m.r });
+      const id = this.tileAt(m.x, m.y);
+      if (id >= 0 && this.tileState[id] !== 2) this.breakTile(id);
+      this.knock(m.x, m.y, m.r * 1.6, this.map.meteors.power, null, null, 260);
+    }
+    this.meteors = this.meteors.filter((m) => m.t > 0);
+  }
+
+  spawnItem() {
+    const t = this.safeSpot();
+    if (!t || this.items.some((it) => Math.hypot(it.x - t.cx, it.y - t.cy) < 60)) return;
+    const types = this.mode.itemTypes || K.ITEM_TYPES;
+    const type = types[Math.floor(Math.random() * types.length)];
+    this.items.push({ id: this.nextObj++, type, x: t.cx, y: t.cy });
+  }
+
+  // 玩家按下"使用道具"
+  useItem(p) {
+    if (!p.item || this.phase !== 'playing' || !p.alive || p.falling > 0 || p.hanging) return false;
+    const type = p.item;
+    p.item = null;
+    this.applyItem(p, { type, x: p.x, y: p.y });
+    return true;
+  }
+
+  applyItem(p, item) {
+    p.stats.items++;
+    this.event({ type: 'pickup', id: p.id, item: item.type, x: r1(item.x), y: r1(item.y) });
+    switch (item.type) {
+      case 'bomb':
+        this.event({ type: 'shock', id: p.id, x: r1(p.x), y: r1(p.y), r: K.BOMB_RADIUS });
+        this.knock(p.x, p.y, K.BOMB_RADIUS, K.BOMB_POWER, p, (o) => o.kind === 'ball' || this.isEnemy(p, o), 320);
+        break;
+      case 'freeze':
+        this.event({ type: 'freeze', id: p.id, x: r1(p.x), y: r1(p.y), r: K.FREEZE_RADIUS });
+        for (const o of this.activeBodies()) {
+          if (!this.isEnemy(p, o) || ghosted(o) || o.fx.shield > 0) continue;
+          if (Math.hypot(o.x - p.x, o.y - p.y) > K.FREEZE_RADIUS) continue;
+          o.fx.frozen = K.FREEZE_TIME;
+          o.vx *= 0.3;
+          o.vy *= 0.3;
+        }
+        break;
+      case 'tornado': {
+        const sp = Math.hypot(p.vx, p.vy);
+        const a = sp > 20 ? Math.atan2(p.vy, p.vx) : Math.random() * Math.PI * 2;
+        this.hazards.push({ id: this.nextObj++, type: 'tornado', x: p.x + Math.cos(a) * 70, y: p.y + Math.sin(a) * 70, a, life: 7, owner: p.id });
+        break;
+      }
+      case 'banana': {
+        const sp = Math.hypot(p.vx, p.vy);
+        const dx = sp > 20 ? p.vx / sp : 0;
+        const dy = sp > 20 ? p.vy / sp : 1;
+        for (let k = -1; k <= 1; k++) {
+          this.traps.push({ id: this.nextObj++, x: p.x - dx * 55 + dy * k * 40, y: p.y - dy * 55 - dx * k * 40, owner: p.id, arm: 0.8, life: 25 });
+        }
+        break;
+      }
+      default:
+        p.fx[item.type] = K.ITEM_DURATION[item.type];
+    }
+    if (this.mode.onItem) this.mode.onItem(this, p, item);
+  }
+
+  // 掉出场地、掉落动画、复活
+  updateFalls(active, dt, playing) {
+    const mode = this.mode;
+    for (const b of active) {
+      if (b.hanging) continue;
+      if (b.kind === 'player') {
+        if (airborne(b)) continue; // 在空中：落地之前不看脚下
+        if (this.supported(b.x, b.y, b.floorZ || 0)) {
+          b.coyote = K.JUMP_COYOTE;
+          continue;
+        }
+        // 土狼时间：刚走出边缘 / 脚下刚塌，还有 0.1 秒可以起跳
+        if (b.coyote > 0) {
+          b.coyote -= dt;
+          if (b.coyote < 1e-6) b.coyote = 0; // 浮点误差：用完就是 0（闯关模式按这个判断什么时候开始吊住）
+          continue;
+        }
+      } else if (this.supported(b.x, b.y, b.floorZ || 0)) continue;
+      b.falling = 0.6;
+      b.hanging = false;
+      if (b.kind === 'player') {
+        b.item = null;
+        b.stats.falls++;
+        this.event({ type: 'fall', id: b.id });
+        const killer = b.lastHitBy && this.roundTime - b.lastHitTime < K.KO_WINDOW ? this.players.get(b.lastHitBy) : null;
+        if (killer && killer !== b && this.isEnemy(killer, b)) {
+          killer.kills++;
+          killer.stats.kills++;
+          this.event({ type: 'ko', id: killer.id, victim: b.id });
+          this.botTaunt(killer, ['lol', 'bleh', 'noob', 'ez', 'weak', 'bye', 'catch'], 0.35);
+          this.botTaunt(b, ['cry', 'mad', 'rip', 'wait'], 0.2);
+        }
+        if (mode.onPlayerFall) mode.onPlayerFall(this, b, killer);
+      } else {
+        this.event({ type: 'bodyFall', id: b.id, kind: b.kind });
+        if (mode.onBodyFall) mode.onBodyFall(this, b);
+      }
+    }
+    for (const p of this.list()) {
+      if (p.falling > 0) {
+        p.falling -= dt;
+        p.x += p.vx * dt * 0.5;
+        p.y += p.vy * dt * 0.5;
+        if (p.falling <= 0) {
+          p.falling = 0;
+          p.alive = false;
+          p.z = p.vz = 0; // 出局的人不留在半空（快照里的 z 只对场上的人有意义）
+          p.floorZ = 0;
+          if (mode.respawn && (!mode.canRespawn || mode.canRespawn(this, p))) p.respawn = mode.respawnDelay || 2;
+        }
+      } else if (!p.alive && mode.respawn && p.respawn > 0 && playing && !p.out) {
+        p.respawn -= dt;
+        if (p.respawn <= 0) this.respawnPlayer(p);
+      }
+    }
+    for (const b of this.bodies) {
+      if (b.falling > 0) {
+        b.falling -= dt;
+        b.x += b.vx * dt * 0.5;
+        b.y += b.vy * dt * 0.5;
+        if (b.falling <= 0) b.alive = false;
+      }
+    }
+    this.bodies = this.bodies.filter((b) => b.alive);
+  }
+
+  respawnPlayer(p) {
+    let pos = this.mode.respawnPos ? this.mode.respawnPos(this, p) : null;
+    if (this.mode.id === 'football' && this.map.goal) {
+      // 足球：在自己半场复活
+      const side = p.team === 0 ? -1 : 1;
+      for (let k = 0; k < 8 && !pos; k++) {
+        const x = side * rand(80, this.map.goal.x * 0.8);
+        const y = rand(-150, 150);
+        if (this.safeAt(x, y)) pos = { x, y };
+      }
+    }
+    if (!pos) {
+      const t = this.safeSpot();
+      if (t) pos = { x: t.cx, y: t.cy };
+    }
+    if (!pos) {
+      p.respawn = 0.5;
+      return;
+    }
+    this.placePlayer(p, pos.x, pos.y);
+    p.fx.ghost = 1.2; // 复活保护
+    this.event({ type: 'respawn', id: p.id });
+  }
+
+  // ------------------------------------------------------------------
+  // 快照
+  // ------------------------------------------------------------------
+  snapshot() {
+    const next = this.nextRingCollapse();
+    const st = this.settings;
+    return {
+      t: 'state',
+      code: this.code,
+      settings: st,
+      hostId: this.hostId,
+      phase: this.phase,
+      timer: r1(Math.max(0, this.timer)),
+      round: this.round,
+      roundText: this.roundText,
+      roundKey: this.roundKey || '',
+      roundP: this.roundP || {},
+      winner: this.lastWinner,
+      winnerTeam: this.winnerTeam,
+      teamScore: this.teamScore,
+      matchTime: Math.round(this.matchTime),
+      warn: this.phase === 'playing' && next <= this.map.collapse.warn ? r1(Math.max(0, next)) : -1,
+      tiles: String.fromCharCode(...this.tileState.map((s) => 48 + s)),
+      events: this.events,
+      items: this.items.map((it) => ({ id: it.id, type: it.type, x: r1(it.x), y: r1(it.y) })),
+      hazards: this.hazards.map((h) => ({ id: h.id, type: h.type, x: r1(h.x), y: r1(h.y), life: r1(h.life) })),
+      traps: this.traps.map((t) => ({ id: t.id, x: r1(t.x), y: r1(t.y) })),
+      meteors: this.meteors.map((m) => ({ id: m.id, x: r1(m.x), y: r1(m.y), t: r1(m.t), r: m.r })),
+      bodies: this.bodies.map((b) => ({ id: b.id, kind: b.kind, x: r1(b.x), y: r1(b.y), vx: Math.round(b.vx), vy: Math.round(b.vy), r: b.r, falling: b.falling > 0, fx: { frozen: r1(b.fx.frozen), slip: r1(b.fx.slip), ghost: r1(b.fx.ghost) } })),
+      m: this.inGame || this.phase === 'gameOver' ? (this.mode.snapshot ? this.mode.snapshot(this) : {}) : {},
+      players: this.list().map((p) => ({
+        id: p.id,
+        name: p.name,
+        profile: p.profile,
+        bot: p.bot,
+        team: p.team,
+        ready: p.ready,
+        connected: p.connected,
+        afk: p.afk,
+        x: r1(p.x),
+        y: r1(p.y),
+        vx: Math.round(p.vx),
+        vy: Math.round(p.vy),
+        z: r1(p.z),
+        groundZ: r1(p.floorZ || 0),
+        vz: Math.round(p.vz),
+        hole: p.z > 0 && !this.supported(p.x, p.y, p.floorZ || 0) ? 1 : 0, // 空中且脚下没地面：客户端不画影子
+        concealed: this.concealed(p),
+        r: radiusOf(p),
+        alive: p.alive,
+        falling: p.falling > 0,
+        hang: p.hanging ? 1 : 0,
+        exploded: p.exploded,
+        respawn: r1(p.respawn),
+        out: p.out,
+        score: r1(p.score),
+        kills: p.kills,
+        dashCd: Math.round(p.dashCd * 100) / 100,
+        skillCd: Math.round(p.skillCd * 100) / 100,
+        item: p.item || '',
+        fx: Object.fromEntries(Object.entries(p.fx).map(([k, v]) => [k, r1(v)])),
+      })),
+      results: this.phase === 'gameOver' ? this.results : null,
+    };
+  }
+
+  // 房间列表里显示的信息
+  summary() {
+    const host = this.players.get(this.hostId);
+    return {
+      code: this.code,
+      name: this.settings.name, // 为空时客户端显示「XX的房间」（按玩家的语言）
+      host: host ? host.name : '',
+      players: this.players.size,
+      humans: this.humans().length,
+      max: this.settings.max,
+      mode: this.settings.mode,
+      map: this.settings.map,
+      phase: this.phase,
+    };
+  }
+}
+
+module.exports = { Room };
