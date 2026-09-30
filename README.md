@@ -18,6 +18,11 @@ Bump, dash and shove your friends off crumbling floating arenas — or rope up a
 
 **English** · [简体中文](README.zh-CN.md)
 
+<p align="center">
+  <a href="https://github.com/khaichonggg/Bumper-Brawl/releases/latest"><img src="https://img.shields.io/badge/Download-Windows%20Setup-6757DE?style=for-the-badge&logo=windows&logoColor=white" alt="Download the Windows installer"></a>
+  <br><sub>One setup file · Node.js included · Desktop shortcuts · Uninstaller</sub>
+</p>
+
 <img src="public/demos/classic.gif" alt="Classic Brawl gameplay recording" width="760">
 
 </div>
@@ -26,7 +31,8 @@ Bump, dash and shove your friends off crumbling floating arenas — or rope up a
 
 ## ✨ Why you'll love it
 
-- 🕹️ **Zero install** — download, double-click `start.bat` / `start.command`, done. Everyone else just opens a browser (PC, Mac, phone, tablet)
+- 🪟 **One-file Windows setup** — Node.js included, with Desktop and Start Menu shortcuts plus an uninstaller
+- 🕹️ **Play in your browser** — friends join from a PC, Mac, phone or tablet; no game download for guests
 - 🌍 **Online link** — one click generates a public link so friends anywhere can join
 - 📱 **Scan a QR code to join** — same Wi‑Fi, no accounts, no downloads
 - 🎮 **16 modes with clear win conditions** — start with four recommended modes, or filter for versus and co-op; every match starts on a randomly selected map
@@ -92,24 +98,21 @@ Step off an edge and a standing teammate catches you on the rope and reels you b
 
 ## 🚀 Quick start (2 minutes)
 
-1. Download this repo: **Code → Download ZIP** and unzip it (or `git clone https://github.com/khaichonggg/Bumper-Brawl.git`).
-2. Start the game:
-   - **Windows:** double-click **`start.bat`** — nothing to install: if Node.js isn't on your PC, it downloads a portable copy (~30 MB) into `runtime\` the first time
-   - **macOS:** double-click **`start.command`** (first time: right-click → Open)
-   - **Linux:** run **`./start.sh`**
+1. **Windows:** download [MyGameSetup.exe](https://github.com/khaichonggg/Bumper-Brawl/releases/latest/download/MyGameSetup.exe), finish setup, then launch Bumper Brawl from the Desktop or Start Menu. Node.js is included.
+2. **macOS / Linux:** clone or download this repository, then launch with `start.command` or `./start.sh`.
 
    (macOS / Linux need **[Node.js](https://nodejs.org/)** LTS installed once.)
 
 > **Only the host downloads the game and runs start.bat. Friends don’t download anything: they open the link the host shares from Invite in their browser (a 192.168… link on the same Wi‑Fi, or the 🌍 Online link from anywhere).** A friend who runs start.bat themselves starts a separate server and can never reach the host’s room.
 
-Your browser opens the game automatically. **No `npm install` needed** — everything is included.
+Your browser opens the host's game automatically. **No `npm install` needed.** Only the host runs the game server; friends join through the shared browser link.
 
 <details>
 <summary>Prefer the command line?</summary>
 
 ```bash
 git clone https://github.com/khaichonggg/Bumper-Brawl.git
-cd Game
+cd Bumper-Brawl
 npm start            # or: node launcher.js
 ```
 
@@ -121,7 +124,7 @@ The game uses port 3100 (3000 is avoided because many tools use or even force-cl
 When the game starts, the window shows the address for your friends **and a QR code**:
 
 ```
-  🎱 Bumper Brawl v2.2.0 is running!
+  🎱 Bumper Brawl v2.6.1 is running!
 
   This computer:                   http://localhost:3100
   Friends on the same Wi-Fi:       http://192.168.1.23:3100

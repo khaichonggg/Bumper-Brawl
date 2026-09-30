@@ -11,6 +11,11 @@
 
 [English](README.md) · **简体中文**
 
+<p align="center">
+  <a href="https://github.com/khaichonggg/Bumper-Brawl/releases/latest"><img src="https://img.shields.io/badge/下载-Windows%20安装包-6757DE?style=for-the-badge&logo=windows&logoColor=white" alt="下载 Windows 安装包"></a>
+  <br><sub>单文件安装 · 内置 Node.js · 自动创建快捷方式 · 提供卸载程序</sub>
+</p>
+
 <img src="public/demos/classic.gif" alt="经典乱斗实战录屏" width="760">
 
 </div>
@@ -19,7 +24,8 @@
 
 ## ✨ 特色
 
-- 🕹️ **免安装**：下载后双击 `start.bat` / `start.command` 就能开服，其他人用浏览器打开就能玩（电脑、手机、平板都行）
+- 🪟 **Windows 一键安装**：一个安装包，内置 Node.js，自动创建桌面/开始菜单快捷方式，并提供卸载程序
+- 🕹️ **浏览器游玩**：朋友用电脑、手机或平板打开链接就能加入，不需要下载游戏
 - 🌍 **外网链接**：一键生成公网网址，不在同一个 Wi-Fi 的朋友也能加入
 - 📱 **扫码进房**：同一个 Wi-Fi 下扫二维码直接加入，不用注册
 - 🎮 **16 种模式，明确写出获胜条件**：大厅默认显示 4 个推荐模式，也可以筛选对战或合作；每场开局随机选地图
@@ -69,24 +75,21 @@
 
 ## 🚀 快速开始（2 分钟）
 
-1. 下载游戏：在 GitHub 页面点 **Code → Download ZIP** 并解压（或者 `git clone https://github.com/khaichonggg/Bumper-Brawl.git`）。
-2. 启动：
-   - **Windows**：双击 **`start.bat`**，什么都不用装：电脑上没有 Node.js 的话，第一次运行会自动下载一个免安装版（约 30MB）放进 `runtime\` 文件夹
-   - **macOS**：双击 **`start.command`**（第一次需要右键 → 打开）
-   - **Linux**：运行 **`./start.sh`**
+1. **Windows**：下载 [MyGameSetup.exe](https://github.com/khaichonggg/Bumper-Brawl/releases/latest/download/MyGameSetup.exe)，完成安装后从桌面或开始菜单启动。安装包已内置 Node.js。
+2. **macOS / Linux**：克隆或下载本仓库，再双击 `start.command` 或运行 `./start.sh`。
 
    （macOS / Linux 需要先安装一次 **[Node.js](https://nodejs.org/)** LTS 版本。）
 
 > **只有开房的人（房主）需要下载游戏、双击 start.bat。朋友不用下载：直接用浏览器打开房主在「邀请」里发的链接（同一个 Wi-Fi 用 192.168 开头的链接，不在一起用「🌍 外网链接」）。** 朋友自己双击 start.bat 会开出另一台独立的服务器，永远进不了房主的房间。
 
-浏览器会自动打开游戏。**不需要 `npm install`**，需要的东西都已经包含在里面了。
+浏览器会自动打开房主的游戏。**不需要 `npm install`**。只有房主运行游戏服务器；朋友打开房主分享的浏览器链接即可加入。
 
 <details>
 <summary>喜欢用命令行？</summary>
 
 ```bash
 git clone https://github.com/khaichonggg/Bumper-Brawl.git
-cd Game
+cd Bumper-Brawl
 npm start            # 或者：node launcher.js
 ```
 

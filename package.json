@@ -1,7 +1,7 @@
 {
   "name": "bumper-balls",
   "version": "2.6.1",
-  "description": "碰碰球大乱斗 - 轻量多人在线派对游戏",
+  "description": "A browser-based 3D party brawler for 1–8 players with 16 modes, random arenas, bots, LAN and online multiplayer.",
   "main": "server.js",
   "scripts": {
     "start": "node launcher.js",
@@ -26,5 +26,5 @@
     "branch": "",
     "fallbackBranch": "main"
   },
-  "releaseNotes": "迁移到 Bumper Brawl 新公开仓库；更新游戏内的一键更新地址"
+  "releaseNotes": "新增 Windows 单文件安装器，内置 Node.js、桌面和开始菜单快捷方式及卸载程序；游戏内一键更新现已指向 Bumper Brawl 官方仓库。"
 }
