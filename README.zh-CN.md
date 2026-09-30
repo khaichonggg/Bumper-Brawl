@@ -69,7 +69,7 @@
 
 ## 🚀 快速开始（2 分钟）
 
-1. 下载游戏：在 GitHub 页面点 **Code → Download ZIP** 并解压（或者 `git clone https://github.com/khaichonggg/Game.git`）。
+1. 下载游戏：在 GitHub 页面点 **Code → Download ZIP** 并解压（或者 `git clone https://github.com/khaichonggg/Bumper-Brawl.git`）。
 2. 启动：
    - **Windows**：双击 **`start.bat`**，什么都不用装：电脑上没有 Node.js 的话，第一次运行会自动下载一个免安装版（约 30MB）放进 `runtime\` 文件夹
    - **macOS**：双击 **`start.command`**（第一次需要右键 → 打开）
@@ -85,7 +85,7 @@
 <summary>喜欢用命令行？</summary>
 
 ```bash
-git clone https://github.com/khaichonggg/Game.git
+git clone https://github.com/khaichonggg/Bumper-Brawl.git
 cd Game
 npm start            # 或者：node launcher.js
 ```
@@ -215,4 +215,4 @@ test/                自动化测试
 
 ## ⭐ 喜欢的话
 
-如果它让你们的游戏之夜更开心，请给仓库点一个 **Star**，这对我帮助很大！有 bug 或想法欢迎提 [Issues](https://github.com/khaichonggg/Game/issues)。
+如果它让你们的游戏之夜更开心，请给仓库点一个 **Star**，这对我帮助很大！有 bug 或想法欢迎提 [Issues](https://github.com/khaichonggg/Bumper-Brawl/issues)。

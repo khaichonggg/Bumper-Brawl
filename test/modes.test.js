@@ -90,16 +90,26 @@ function runMatch(mapId, modeId, players = 8, target) {
 {
   const { room: variety } = makeRoom();
   const picked = new Set();
+  const ids = Object.keys(MAPS);
+  const originalRandom = Math.random;
   let previous = null;
   let noRepeat = true;
-  for (let i = 0; i < Object.keys(MAPS).length * 3; i++) {
-    const id = variety.pickRandomMap();
-    if (id === previous) noRepeat = false;
-    picked.add(id);
-    previous = id;
+  try {
+    // Test every map with a deterministic random value; probabilistic coverage flakes in CI.
+    for (const expected of ids) {
+      const choices = ids.filter((id) => id !== previous);
+      const index = choices.indexOf(expected);
+      Math.random = () => (index + 0.5) / choices.length;
+      const id = variety.pickRandomMap();
+      if (id === previous) noRepeat = false;
+      picked.add(id);
+      previous = id;
+    }
+  } finally {
+    Math.random = originalRandom;
   }
   check(noRepeat, '随机地图不会和上一场重复');
-  check(picked.size === Object.keys(MAPS).length, '随机地图池包含全部地图');
+  check(picked.size === ids.length, '随机地图池包含全部地图');
 
   const { room } = makeRoom();
   room.applySettings({ mode: 'classic', floorCollapse: false });

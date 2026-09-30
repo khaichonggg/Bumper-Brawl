@@ -19,7 +19,7 @@ const KEEP = new Set(['data', 'node_modules', '.git']);
 const readPkg = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const cfg = () => {
   const u = readPkg().update || {};
-  return { repo: process.env.UPDATE_REPO || u.repo || 'khaichonggg/Game', branch: process.env.UPDATE_BRANCH || u.branch || '', fallback: u.fallbackBranch || '' };
+  return { repo: process.env.UPDATE_REPO || u.repo || 'khaichonggg/Bumper-Brawl', branch: process.env.UPDATE_BRANCH || u.branch || '', fallback: u.fallbackBranch || '' };
 };
 // 测试时可以把 GitHub 的三个地址换成本地假服务器
 const BASE = {

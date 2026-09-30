@@ -1,6 +1,12 @@
 // 更新内容（What's New）：新版本写在最前面。设置里的「📰 更新内容」按钮会显示这里的内容
 export const CHANGELOG = [
   {
+    v: '2.6.1',
+    date: '2026-09-30',
+    zh: ['📦 项目迁移到 Bumper-Brawl 新公开仓库，修正游戏内一键更新地址'],
+    en: ['📦 Moved to the clean Bumper-Brawl public repository and updated the in-game updater address'],
+  },
+  {
     v: '2.6.0',
     date: '2026-09-30',
     zh: [

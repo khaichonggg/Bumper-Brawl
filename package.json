@@ -1,6 +1,6 @@
 {
   "name": "bumper-balls",
-  "version": "2.6.0",
+  "version": "2.6.1",
   "description": "碰碰球大乱斗 - 轻量多人在线派对游戏",
   "main": "server.js",
   "scripts": {
@@ -10,21 +10,21 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/khaichonggg/Game.git"
+    "url": "git+https://github.com/khaichonggg/Bumper-Brawl.git"
   },
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/khaichonggg/Game/issues"
+    "url": "https://github.com/khaichonggg/Bumper-Brawl/issues"
   },
-  "homepage": "https://github.com/khaichonggg/Game#readme",
+  "homepage": "https://github.com/khaichonggg/Bumper-Brawl#readme",
   "engines": {
     "node": ">=18"
   },
   "update": {
-    "repo": "khaichonggg/Game",
+    "repo": "khaichonggg/Bumper-Brawl",
     "branch": "",
     "fallbackBranch": "main"
   },
-  "releaseNotes": "新增 9 种模式、5 张随机地图、获胜条件说明和实战录屏；加入 Boss 技能、跳跃及手机操作优化"
+  "releaseNotes": "迁移到 Bumper Brawl 新公开仓库；更新游戏内的一键更新地址"
 }

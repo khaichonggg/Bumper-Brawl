@@ -92,7 +92,7 @@ Step off an edge and a standing teammate catches you on the rope and reels you b
 
 ## 🚀 Quick start (2 minutes)
 
-1. Download this repo: **Code → Download ZIP** and unzip it (or `git clone https://github.com/khaichonggg/Game.git`).
+1. Download this repo: **Code → Download ZIP** and unzip it (or `git clone https://github.com/khaichonggg/Bumper-Brawl.git`).
 2. Start the game:
    - **Windows:** double-click **`start.bat`** — nothing to install: if Node.js isn't on your PC, it downloads a portable copy (~30 MB) into `runtime\` the first time
    - **macOS:** double-click **`start.command`** (first time: right-click → Open)
@@ -108,7 +108,7 @@ Your browser opens the game automatically. **No `npm install` needed** — every
 <summary>Prefer the command line?</summary>
 
 ```bash
-git clone https://github.com/khaichonggg/Game.git
+git clone https://github.com/khaichonggg/Bumper-Brawl.git
 cd Game
 npm start            # or: node launcher.js
 ```
@@ -242,4 +242,4 @@ Every mode is played to the end on every map by 8 bots, plus lobby/party protoco
 
 ## ⭐ Like it?
 
-If this made your game night better, please give the repo a **star** — it really helps! Bug reports and ideas are welcome in [Issues](https://github.com/khaichonggg/Game/issues).
+If this made your game night better, please give the repo a **star** — it really helps! Bug reports and ideas are welcome in [Issues](https://github.com/khaichonggg/Bumper-Brawl/issues).
