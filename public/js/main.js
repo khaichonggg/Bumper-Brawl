@@ -1071,8 +1071,7 @@ function renderLobby() {
     shownModes.map((id) => {
       const md = MODES[id];
       const cls = ['boss', 'monsterWave'].includes(id) ? 'coop' : md.teams ? 'team' : '';
-      const number = String(MODE_IDS.indexOf(id) + 1).padStart(2, '0');
-      return `<button class="card mode-card ${cls} ${st.mode === id ? 'on' : ''}" data-mode="${id}"><span class="mode-mark" aria-hidden="true">${number}</span><b>${md.name}</b><span class="tag">${md.tag}</span></button>`;
+      return `<button class="card mode-card ${cls} ${st.mode === id ? 'on' : ''}" data-mode="${id}"><span class="mode-mark" aria-hidden="true">${md.icon}</span><b>${md.name}</b><span class="tag">${md.tag}</span></button>`;
     }).join('')
   );
   const md = MODES[st.mode];
@@ -1085,8 +1084,7 @@ function renderLobby() {
       : st.mode === 'rope'
         ? tr('<br>💡 1~8 人都能玩，地图决定关卡的主题和手感（冰面很滑！）')
         : '';
-  const modeNumber = String(MODE_IDS.indexOf(st.mode) + 1).padStart(2, '0');
-  setHTML($('modeDesc'), `<div class="mode-summary"><div class="mode-summary-text"><span class="mode-mark" aria-hidden="true">${modeNumber}</span><b>${md.name}</b><small>${md.short}</small></div><button class="btn btn-mini mode-guide-trigger" data-mode-guide="${st.mode}" type="button">${tr('玩法与获胜条件')}</button></div>${need}`);
+  setHTML($('modeDesc'), `<div class="mode-summary"><div class="mode-summary-text"><span class="mode-mark" aria-hidden="true">${md.icon}</span><b>${md.name}</b><small>${md.short}</small></div><button class="btn btn-mini mode-guide-trigger" data-mode-guide="${st.mode}" type="button">${tr('玩法与获胜条件')}</button></div>${need}`);
   setHTML($('targetLabel'), md.label);
   setHTML($('targetSeg'), md.targets.map((t) => `<button data-target="${t}" class="${st.target === t ? 'on' : ''}">${md.targetNames ? md.targetNames[t] : t + md.unit}</button>`).join(''));
   setHTML($('maxVal'), String(st.max));
@@ -1852,11 +1850,10 @@ async function renderHelp() {
       card('🔄', tr('掉线重连'), tr('刷新页面或网络断开后会自动回到原来的房间；比赛中 60 秒内回来，机器人会先帮你顶着。')),
     ].join('');
   } else if (helpTab === 'modes') {
-    html = MODE_IDS.map((id, i) => {
+    html = MODE_IDS.map((id) => {
       const md = MODES[id];
       const demo = MODE_DEMOS[id];
-      const number = String(i + 1).padStart(2, '0');
-      return `<div class="help-card mode-help-card"><span class="mode-mark" aria-hidden="true">${number}</span><b>${md.name} <small>${md.tag}</small></b><p>${md.desc}</p><p class="mode-win"><strong>${tr('获胜条件')}：</strong>${md.win}</p>${demo ? `<button class="btn btn-mini mode-demo-link" data-mode-guide="${id}" type="button">${tr('观看演示录屏')}</button>` : ''}</div>`;
+      return `<div class="help-card mode-help-card"><span class="mode-mark" aria-hidden="true">${md.icon}</span><b>${md.name} <small>${md.tag}</small></b><p>${md.desc}</p><p class="mode-win"><strong>${tr('获胜条件')}：</strong>${md.win}</p>${demo ? `<button class="btn btn-mini mode-demo-link" data-mode-guide="${id}" type="button">${tr('观看演示录屏')}</button>` : ''}</div>`;
     }).join('');
   } else if (helpTab === 'items') {
     html = Object.values(ITEMS)

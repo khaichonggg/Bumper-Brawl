@@ -1,6 +1,12 @@
 // 更新内容（What's New）：新版本写在最前面。设置里的「📰 更新内容」按钮会显示这里的内容
 export const CHANGELOG = [
   {
+    v: '2.6.2',
+    date: '2026-10-01',
+    zh: ['🎮 恢复模式卡片、当前模式摘要和玩法说明里的图标，并统一为低饱和样式', '🏁 替换部分 Windows 字体不支持的浮台竞速图标'],
+    en: ['🎮 Restored visible mode icons in the lobby and guide with a consistent, toned-down style', '🏁 Replaced the platform-race symbol unsupported by some Windows emoji fonts'],
+  },
+  {
     v: '2.6.1',
     date: '2026-09-30',
     zh: ['📦 项目迁移到 Bumper-Brawl 新公开仓库，修正游戏内一键更新地址'],

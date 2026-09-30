@@ -2,7 +2,7 @@ Unicode true
 !include "MUI2.nsh"
 
 !define PRODUCT_NAME "Bumper Brawl"
-!define PRODUCT_VERSION "2.6.1"
+!define PRODUCT_VERSION "2.6.2"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\BumperBrawl"
 
 !ifndef NODE_EXE
@@ -37,7 +37,7 @@ ShowUninstDetails show
 !define MUI_TEXTCOLOR "1D1D1F"
 !define MUI_INSTFILESPAGE_COLORS "FFFFFF 1D1D1F"
 
-VIProductVersion "2.6.1.0"
+VIProductVersion "2.6.2.0"
 VIAddVersionKey /LANG=1033 "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey /LANG=1033 "FileDescription" "${PRODUCT_NAME} Setup"
 VIAddVersionKey /LANG=1033 "CompanyName" "Bumper Brawl"

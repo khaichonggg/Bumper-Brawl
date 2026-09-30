@@ -124,7 +124,7 @@ The game uses port 3100 (3000 is avoided because many tools use or even force-cl
 When the game starts, the window shows the address for your friends **and a QR code**:
 
 ```
-  🎱 Bumper Brawl v2.6.1 is running!
+  🎱 Bumper Brawl v2.6.2 is running!
 
   This computer:                   http://localhost:3100
   Friends on the same Wi-Fi:       http://192.168.1.23:3100

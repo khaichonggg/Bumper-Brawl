@@ -1182,19 +1182,27 @@ html:not([lang='en']) .sub-en {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: 8px;
+  border-radius: 10px;
   color: #ddd7f1;
-  background: rgba(0, 0, 0, 0.14);
-  font: 700 10px/1 var(--font);
-  letter-spacing: 0.08em;
+  background: rgba(255, 255, 255, 0.07);
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", var(--font);
+  font-size: 18px;
+  line-height: 1;
+  filter: grayscale(1);
 }
 
 .mode-card .mode-mark {
   display: flex;
+  flex: 0 0 32px;
   margin: 0 auto 5px;
+}
+
+.mode-card.on .mode-mark {
+  border-color: rgba(255, 210, 63, 0.48);
+  background: rgba(255, 210, 63, 0.12);
 }
 
 .mode-card b {
@@ -2537,6 +2545,8 @@ tr.win td {
     width: 24px;
     height: 24px;
     margin-bottom: 3px;
+    flex-basis: 24px;
+    font-size: 15px;
   }
   .mode-card .tag {
     display: none;

@@ -237,7 +237,7 @@ export const MODES = {
     tag: '协作 1-8 人',
   },
   platformRace: {
-    icon: '🛟',
+    icon: '🏁',
     name: '浮台竞速',
     short: '跳台绕圈',
     desc: '四块浮台不停绕场移动。按顺序跳上每块浮台完成检查点，先绕完目标圈数获胜；站稳后会被浮台带着移动。',
