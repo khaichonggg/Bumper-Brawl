@@ -1,6 +1,12 @@
 // 更新内容（What's New）：新版本写在最前面。设置里的「📰 更新内容」按钮会显示这里的内容
 export const CHANGELOG = [
   {
+    v: '2.6.3',
+    date: '2026-10-01',
+    zh: ['📜 许可证更新为 PolyForm Noncommercial 1.0.0，仅允许非商业用途；第三方依赖遵循各自许可证'],
+    en: ['📜 Updated the project license to PolyForm Noncommercial 1.0.0; third-party components retain their own licenses'],
+  },
+  {
     v: '2.6.2',
     date: '2026-10-01',
     zh: ['🎮 恢复模式卡片、当前模式摘要和玩法说明里的图标，并统一为低饱和样式', '🏁 替换部分 Windows 字体不支持的浮台竞速图标'],

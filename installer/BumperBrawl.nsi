@@ -2,7 +2,7 @@ Unicode true
 !include "MUI2.nsh"
 
 !define PRODUCT_NAME "Bumper Brawl"
-!define PRODUCT_VERSION "2.6.2"
+!define PRODUCT_VERSION "2.6.3"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\BumperBrawl"
 
 !ifndef NODE_EXE
@@ -37,7 +37,7 @@ ShowUninstDetails show
 !define MUI_TEXTCOLOR "1D1D1F"
 !define MUI_INSTFILESPAGE_COLORS "FFFFFF 1D1D1F"
 
-VIProductVersion "2.6.2.0"
+VIProductVersion "2.6.3.0"
 VIAddVersionKey /LANG=1033 "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey /LANG=1033 "FileDescription" "${PRODUCT_NAME} Setup"
 VIAddVersionKey /LANG=1033 "CompanyName" "Bumper Brawl"
@@ -48,9 +48,9 @@ VIAddVersionKey /LANG=1033 "OriginalFilename" "MyGameSetup.exe"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Welcome to Bumper Brawl"
 !define MUI_WELCOMEPAGE_TEXT "Quick matches. Big collisions. Friends welcome.$\r$\n$\r$\nThis wizard will install Bumper Brawl ${PRODUCT_VERSION} on your computer."
-!define MUI_LICENSEPAGE_TEXT_TOP "Please read and accept the ISC License to continue."
+!define MUI_LICENSEPAGE_TEXT_TOP "Please read and accept the PolyForm Noncommercial License 1.0.0 to continue."
 !define MUI_LICENSEPAGE_CHECKBOX
-!define MUI_LICENSEPAGE_CHECKBOX_TEXT "I agree to the ISC License terms"
+!define MUI_LICENSEPAGE_CHECKBOX_TEXT "I agree to the PolyForm Noncommercial License 1.0.0 terms"
 !define MUI_DIRECTORYPAGE_TEXT_TOP "Choose where Bumper Brawl should be installed."
 !define MUI_FINISHPAGE_TITLE "You are ready to play."
 !define MUI_FINISHPAGE_TEXT "Bumper Brawl is installed. Launch it now or use the Desktop and Start Menu shortcuts later."

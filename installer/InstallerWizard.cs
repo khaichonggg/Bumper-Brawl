@@ -14,8 +14,8 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyDescription("Bumper Brawl Windows installer")]
 [assembly: AssemblyCompany("Bumper Brawl")]
 [assembly: AssemblyProduct("Bumper Brawl")]
-[assembly: AssemblyVersion("2.6.2.0")]
-[assembly: AssemblyFileVersion("2.6.2.0")]
+[assembly: AssemblyVersion("2.6.3.0")]
+[assembly: AssemblyFileVersion("2.6.3.0")]
 
 internal static class InstallerWizard
 {
@@ -162,7 +162,7 @@ internal sealed class SetupForm : Form
         using (SolidBrush b = new SolidBrush(Ink)) g.DrawString("Bumper Brawl", f, b, 68, 32);
         using (Font f = new Font("Segoe UI", 8F, FontStyle.Bold))
         using (SolidBrush b = new SolidBrush(Color.FromArgb(130, 124, 148)))
-            g.DrawString("WINDOWS SETUP  ·  2.6.2", f, b, 36, 69);
+            g.DrawString("WINDOWS SETUP  ·  2.6.3", f, b, 36, 69);
 
         // Abstract bumper spheres echo the game without mascots or cartoon faces.
         DrawBall(g, 64, 224, 154, Color.FromArgb(198, 184, 255), Color.FromArgb(112, 91, 227));
@@ -266,7 +266,7 @@ internal sealed class SetupForm : Form
 
         CheckBox accept = new CheckBox();
         accept.SetBounds(0, 371, content.Width - 5, 28);
-        accept.Text = "I have read and accept the ISC License";
+        accept.Text = "I have read and accept the PolyForm Noncommercial License 1.0.0";
         accept.Font = new Font("Segoe UI", 9.5F, FontStyle.Regular);
         accept.ForeColor = Ink;
         accept.CheckedChanged += delegate { nextButton.Enabled = accept.Checked; };

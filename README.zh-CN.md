@@ -216,6 +216,10 @@ test/                自动化测试
 
 排行榜数据保存在 `data/leaderboard.json`，删除这个文件即可清空。
 
+## 📄 许可证
+
+本项目自有代码采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，仅限非商业用途。第三方组件仍保留各自的许可证；例如，自带的 WebSocket 库保留原有 [MIT 许可证](server/vendor/ws/LICENSE)。
+
 ## ⭐ 喜欢的话
 
 如果它让你们的游戏之夜更开心，请给仓库点一个 **Star**，这对我帮助很大！有 bug 或想法欢迎提 [Issues](https://github.com/khaichonggg/Bumper-Brawl/issues)。

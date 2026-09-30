@@ -1,6 +1,6 @@
 {
   "name": "bumper-balls",
-  "version": "2.6.2",
+  "version": "2.6.3",
   "description": "A browser-based 3D party brawler for 1–8 players with 16 modes, random arenas, bots, LAN and online multiplayer.",
   "main": "server.js",
   "scripts": {
@@ -13,7 +13,7 @@
     "url": "git+https://github.com/khaichonggg/Bumper-Brawl.git"
   },
   "author": "",
-  "license": "ISC",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "bugs": {
     "url": "https://github.com/khaichonggg/Bumper-Brawl/issues"
   },
@@ -26,5 +26,5 @@
     "branch": "",
     "fallbackBranch": "main"
   },
-  "releaseNotes": "修复大厅模式卡片和玩法说明页看不到模式图标的问题，并替换部分 Windows 字体不支持的竞速图标。"
+  "releaseNotes": "许可证更新为 PolyForm Noncommercial 1.0.0，仅允许非商业用途；第三方依赖继续遵循各自许可证。"
 }
